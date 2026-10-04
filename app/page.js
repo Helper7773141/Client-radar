@@ -188,14 +188,35 @@ export default function Home() {
             <div className="period">Последние {data.lookbackDays} дней</div>
           </section>
 
-          {data.relations && data.relations.length > 1 && (
+          {((data.relations && data.relations.length > 0) ||
+            (data.subsidiaries && data.subsidiaries.length > 0) ||
+            (data.relatedCompanies && data.relatedCompanies.length > 0)) && (
             <details className="relationsSimple">
-              <summary>Связанные лица</summary>
+              <summary>Подтвержденные связи</summary>
               <div>
-                {data.relations.map(function(item, index) {
+                {data.relations && data.relations.map(function(item, index) {
                   return (
-                    <span key={index}>
+                    <span key={"person-" + index}>
                       <b>{item.type}:</b> {item.name}
+                      {item.post ? " · " + item.post : ""}
+                      {item.share ? " · доля " + item.share : ""}
+                    </span>
+                  );
+                })}
+
+                {data.subsidiaries && data.subsidiaries.map(function(item, index) {
+                  return (
+                    <span key={"sub-" + index}>
+                      <b>Связанная компания:</b> {item.name}
+                      {item.share ? " · доля " + item.share : ""}
+                    </span>
+                  );
+                })}
+
+                {data.relatedCompanies && data.relatedCompanies.slice(0, 8).map(function(item, index) {
+                  return (
+                    <span key={"related-" + index}>
+                      <b>Через {item.via}:</b> {item.company.name}
                     </span>
                   );
                 })}
