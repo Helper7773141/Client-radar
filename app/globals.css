@@ -180,7 +180,7 @@ button{cursor:pointer}
 }
 .simpleStats{
   display:grid;
-  grid-template-columns:repeat(3,1fr);
+  grid-template-columns:repeat(4,1fr);
   gap:10px;
   margin-top:10px
 }
@@ -247,12 +247,22 @@ button{cursor:pointer}
   border:1px solid var(--line);
   border-radius:15px
 }
-.newsItem{
+.newsItem,.storyItem{
   display:grid;
-  grid-template-columns:42px 1fr;
+  grid-template-columns:42px 42px 1fr;
   border-top:1px solid var(--line)
 }
-.newsItem:first-child{border-top:0}
+.newsItem:first-child,.storyItem:first-child{border-top:0}
+.storyRank{
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding-top:20px;
+  border-right:1px solid var(--line);
+  color:#9aa1ab;
+  font-size:12px;
+  font-weight:800
+}
 .newsCheck{
   display:flex;
   justify-content:center;
@@ -306,6 +316,12 @@ button{cursor:pointer}
   font-size:11px;
   white-space:nowrap
 }
+.importance{
+  color:#6d7580;
+  font-size:11px;
+  font-weight:800;
+  white-space:nowrap
+}
 .newsContent h3{
   margin:10px 0 0;
   font-size:18px;
@@ -320,9 +336,31 @@ button{cursor:pointer}
   color:var(--muted);
   font-size:12px
 }
+.storyMeta{
+  display:flex;
+  gap:12px;
+  margin-top:8px;
+  color:var(--muted);
+  font-size:11px
+}
 .newsSourceLine a{
   color:var(--blue);
   text-decoration:none
+}
+.sourceList{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-top:12px
+}
+.sourceList a,.sourceList span{
+  padding:6px 8px;
+  border:1px solid var(--line);
+  border-radius:7px;
+  background:#fff;
+  color:var(--blue);
+  text-decoration:none;
+  font-size:11px
 }
 .signalBox{
   margin-top:15px;
@@ -488,8 +526,9 @@ footer{
   .companyCard{flex-direction:column}
   .companyCard h2{font-size:23px}
   .simpleStats{grid-template-columns:1fr 1fr}
-  .simpleStats>div:first-child{grid-column:1/-1}
-  .newsItem{grid-template-columns:36px 1fr}
+  .simpleStats>div:first-child{grid-column:auto}
+  .newsItem,.storyItem{grid-template-columns:34px 34px 1fr}
+  .storyRank{font-size:11px}
   .newsContent{padding:15px 12px}
   .newsContent h3{font-size:16px}
   .newsTop{align-items:flex-start}
