@@ -749,3 +749,14 @@ export async function POST(request) {
     }, { status: status });
   }
 }
+
+
+export async function GET(request) {
+  const url = new URL(request.url);
+  const inn = String(url.searchParams.get("inn") || "");
+  return POST({
+    json: async function() {
+      return { inn: inn };
+    }
+  });
+}
