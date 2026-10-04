@@ -6,7 +6,7 @@ function formatDate(value) {
   try {
     return new Intl.DateTimeFormat("ru-RU", {
       day: "numeric",
-      month: "short",
+      month: "long",
       year: "numeric"
     }).format(new Date(value));
   } catch {
@@ -14,16 +14,9 @@ function formatDate(value) {
   }
 }
 
-function makeLetter(company, stories) {
-  const selected = stories.slice(0, 4);
-  const products = Array.from(new Set(
-    selected.flatMap(function(story) {
-      return story.products || [];
-    })
-  )).slice(0, 5);
-
-  const lines = selected.map(function(story) {
-    return "— " + story.headline;
+function makeLetter(company, events) {
+  const lines = events.slice(0, 5).map(function(event) {
+    return "— " + event.title + (event.details ? ": " + event.details : "");
   });
 
   return [
@@ -31,10 +24,6 @@ function makeLetter(company, stories) {
     "",
     "Обратил внимание на несколько актуальных событий вокруг " + company.name + ":",
     lines.join("\n"),
-    "",
-    products.length
-      ? "Хотел уточнить, могут ли в этой связи быть актуальны решения в части " + products.join(", ").toLowerCase() + "."
-      : "Хотел уточнить, есть ли сейчас задачи, где мы могли бы быть полезны.",
     "",
     "Если актуально, предлагаю коротко обсудить."
   ].join("\n");
@@ -49,10 +38,10 @@ export default function Home() {
   const [letterOpen, setLetterOpen] = useState(false);
   const [letter, setLetter] = useState("");
 
-  const selectedStories = useMemo(function() {
+  const selectedEvents = useMemo(function() {
     if (!data) return [];
-    return data.stories.filter(function(story) {
-      return selected.includes(story.id);
+    return data.events.filter(function(event) {
+      return selected.includes(event.id);
     });
   }, [data, selected]);
 
@@ -105,9 +94,9 @@ export default function Home() {
   }
 
   function openLetter() {
-    const chosen = selectedStories.length
-      ? selectedStories
-      : data.stories.slice(0, 3);
+    const chosen = selectedEvents.length
+      ? selectedEvents
+      : data.events.slice(0, 3);
 
     setLetter(makeLetter(data.company, chosen));
     setLetterOpen(true);
@@ -118,17 +107,17 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">ИНН → компания → главные события</div>
+          <div className="headerNote">ИНН → компания → события за 90 дней</div>
         </div>
       </header>
 
       <section className={data ? "searchSection compactSearch" : "searchSection"}>
         {!data && (
           <>
-            <h1>Что важного произошло у компании</h1>
+            <h1>Что произошло у компании</h1>
             <p>
-              Введите ИНН. Сервис определит юрлицо, соберёт свежие публикации,
-              объединит одинаковые новости и оставит только главные сюжеты.
+              Введите ИНН. Мы определим компанию, найдём её рабочие названия,
+              соберём актуальные публикации и сведём их в короткую хронологию.
             </p>
           </>
         )}
@@ -146,8 +135,9 @@ export default function Home() {
               aria-label="ИНН"
             />
           </div>
+
           <button disabled={loading}>
-            {loading ? "Собираем новости…" : data ? "Другая компания" : "Показать главное"}
+            {loading ? "Собираем…" : data ? "Другая компания" : "Показать события"}
           </button>
         </form>
       </section>
@@ -156,8 +146,8 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Собираем публикации и выделяем главное</strong>
-            <span>Проверяем новостные источники и официальный сайт компании, если он находится автоматически.</span>
+            <strong>Собираем новости за последние 90 дней</strong>
+            <span>Определяем рабочие названия компании, ищем публикации и склеиваем дубли.</span>
           </div>
         </section>
       )}
@@ -188,9 +178,9 @@ export default function Home() {
                 </div>
               )}
 
-              {data.officialDomain && (
-                <div className="officialFound">
-                  Официальный сайт найден: <b>{data.officialDomain}</b>
+              {data.aliases && data.aliases.length > 0 && (
+                <div className="aliases">
+                  Ищем как: {data.aliases.join(" · ")}
                 </div>
               )}
             </div>
@@ -198,105 +188,68 @@ export default function Home() {
             <div className="period">Последние {data.lookbackDays} дней</div>
           </section>
 
+          {data.relations && data.relations.length > 1 && (
+            <details className="relationsSimple">
+              <summary>Связанные лица</summary>
+              <div>
+                {data.relations.map(function(item, index) {
+                  return (
+                    <span key={index}>
+                      <b>{item.type}:</b> {item.name}
+                    </span>
+                  );
+                })}
+              </div>
+            </details>
+          )}
+
           <section className="digestLine">
-            Собрано <b>{data.stats.articlesCollected}</b> публикаций ·
-            относятся к компании <b>{data.stats.relevantArticles}</b> ·
-            источников <b>{data.stats.sourcesFound}</b> ·
-            главных сюжетов <b>{data.stats.storiesFound}</b>
+            Собрано <b>{data.stats.collected}</b> публикаций ·
+            после проверки <b>{data.stats.relevant}</b> ·
+            уникальных событий <b>{data.stats.events}</b>
           </section>
 
           <section className="newsHeader">
             <div>
-              <h2>Главное</h2>
+              <h2>Хронология</h2>
               <p>{data.methodology}</p>
             </div>
           </section>
 
-          {data.stories.length === 0 ? (
+          {data.events.length === 0 ? (
             <section className="emptyPanel">
-              <strong>За последние 90 дней значимых публикаций не найдено</strong>
-              <p>Сервис ничего не подставляет искусственно.</p>
+              <strong>За последние 90 дней событий не найдено</strong>
+              <p>Если это выглядит неправдоподобно, значит нужно дорабатывать именно идентификацию рабочего названия компании.</p>
             </section>
           ) : (
-            <section className="newsList">
-              {data.stories.map(function(story, index) {
+            <section className="timeline">
+              {data.events.map(function(event) {
                 return (
-                  <article className="storyItem" key={story.id}>
-                    <label className="newsCheck" title="Добавить в письмо">
+                  <article className="timelineItem" key={event.id}>
+                    <label className="timelineCheck" title="Добавить в письмо">
                       <input
                         type="checkbox"
-                        checked={selected.includes(story.id)}
+                        checked={selected.includes(event.id)}
                         onChange={function() {
-                          toggle(story.id);
+                          toggle(event.id);
                         }}
                       />
                     </label>
 
-                    <div className="storyRank">{index + 1}</div>
+                    <div className="timelineDate">
+                      {formatDate(event.date)}
+                    </div>
 
-                    <div className="newsContent">
-                      <div className="newsTop">
-                        <div className="newsBadges">
-                          <span className="categoryBadge">{story.category}</span>
+                    <div className="timelineContent">
+                      <div className="eventCategory">{event.category}</div>
+                      <h3>{event.title}</h3>
+                      <p>{event.details}</p>
 
-                          {story.factStageKey !== "reported" && (
-                            <span className={"stageBadge " + story.factStageKey}>
-                              {story.factStage}
-                            </span>
-                          )}
-                        </div>
-
-                        <time>{formatDate(story.date)}</time>
-                      </div>
-
-                      <h3>{story.headline}</h3>
-
-                      {story.summary && (
-                        <div className="summaryText">
-                          <small>Суть</small>
-                          <p>{story.summary}</p>
+                      {event.mentions > 1 && (
+                        <div className="mentions">
+                          Найдено в {event.mentions} публикациях
                         </div>
                       )}
-
-                      {story.isSignal && (
-                        <div className="signalBox">
-                          <small>Что это может значить для банка</small>
-                          <p>{story.impact}</p>
-
-                          {story.products.length > 0 && (
-                            <div className="productChips">
-                              {story.products.map(function(product) {
-                                return <span key={product}>{product}</span>;
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="storyFooter">
-                        <span>{story.sourceCount} источн.</span>
-
-                        <div className="sourceList">
-                          {story.sources.map(function(source, sourceIndex) {
-                            return source.url
-                              ? (
-                                <a
-                                  href={source.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  key={sourceIndex}
-                                >
-                                  {source.name || source.domain} ↗
-                                </a>
-                              )
-                              : (
-                                <span key={sourceIndex}>
-                                  {source.name || source.domain}
-                                </span>
-                              );
-                          })}
-                        </div>
-                      </div>
                     </div>
                   </article>
                 );
@@ -304,7 +257,7 @@ export default function Home() {
             </section>
           )}
 
-          {data.stories.length > 0 && (
+          {data.events.length > 0 && (
             <div className="letterBar">
               <div>
                 <strong>
@@ -312,7 +265,7 @@ export default function Home() {
                     ? "Выбрано событий: " + selected.length
                     : "Выберите события для письма"}
                 </strong>
-                <span>Отметьте только те сюжеты, которые подходят для разговора с клиентом.</span>
+                <span>Письмо будет собрано только из отмеченных событий.</span>
               </div>
 
               <button onClick={openLetter}>Составить письмо</button>
@@ -322,8 +275,7 @@ export default function Home() {
       )}
 
       <footer>
-        Client Radar агрегирует публичные публикации и делает краткую выжимку.
-        Банковские выводы являются гипотезами и требуют проверки первоисточника.
+        Client Radar собирает публичные публикации и сводит их в краткую хронологию.
       </footer>
 
       {letterOpen && (
@@ -369,7 +321,7 @@ export default function Home() {
               <a
                 href={
                   "mailto:?subject=" +
-                  encodeURIComponent("Актуальные направления для обсуждения") +
+                  encodeURIComponent("Актуальные события компании") +
                   "&body=" +
                   encodeURIComponent(letter)
                 }
