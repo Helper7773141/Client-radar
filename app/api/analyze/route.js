@@ -230,6 +230,29 @@ function buildSectorQuery(profile) {
   return sector + " " + events;
 }
 
+function relatedQueries(profile) {
+  const companyToken = coreCompanyTokens(profile.name)[0];
+  if (!companyToken) return [];
+  const queries = [];
+
+  if (profile.management && profile.management.name) {
+    queries.push({
+      query: '"' + profile.management.name + '" "' + companyToken + '"',
+      label: "Связь через руководителя"
+    });
+  }
+
+  (profile.founders || []).slice(0, 3).forEach(function(founder) {
+    if (!founder.name) return;
+    queries.push({
+      query: '"' + founder.name + '" "' + companyToken + '"',
+      label: "Связь через учредителя"
+    });
+  });
+
+  return queries;
+}
+
 function profileRelations(profile) {
   const relations = [];
   if (profile.management && profile.management.name) {
@@ -279,6 +302,11 @@ export async function POST(request) {
       gdelt(baseQuery, "company")
     ];
 
+    relatedQueries(profile).forEach(function(item, index) {
+      jobs.push(googleNews(item.query, "related:" + index + ":" + item.label));
+      jobs.push(gdelt(item.query, "related:" + index + ":" + item.label));
+    });
+
     groups.forEach(function(group) {
       jobs.push(googleNews(siteQuery(baseQuery, group), "company"));
     });
@@ -298,9 +326,24 @@ export async function POST(request) {
     const relevant = filterCompanyItems(articles, profile);
     const companyArticles = relevant.filter(function(x) { return x.scope === "company"; });
     const sectorArticles = relevant.filter(function(x) { return x.scope === "sector"; });
+    const relatedArticles = relevant.filter(function(x) { return String(x.scope || "").startsWith("related:"); });
 
-    let events = clusterArticles(companyArticles);
-    const sectorEvents = filterSectorClusters(clusterArticles(sectorArticles));
+    let events = clusterArticles(companyArticles, "Прямая связь с компанией");
+    const sectorEvents = filterSectorClusters(clusterArticles(sectorArticles, "Связь через отрасль и ОКВЭД"));
+
+    const relatedGroups = new Map();
+    relatedArticles.forEach(function(article) {
+      const parts = String(article.scope || "").split(":");
+      const label = parts.slice(2).join(":") || "Связь через связанное лицо";
+      if (!relatedGroups.has(label)) relatedGroups.set(label, []);
+      relatedGroups.get(label).push(article);
+    });
+
+    relatedGroups.forEach(function(items, label) {
+      clusterArticles(items, label).forEach(function(event) {
+        events.push(event);
+      });
+    });
 
     const existingKeys = new Set(events.map(function(e) { return e.category + "|" + e.title; }));
     sectorEvents.forEach(function(e) {
@@ -312,6 +355,7 @@ export async function POST(request) {
     });
 
     events = events.sort(function(a,b) {
+      if (b.priorityScore !== a.priorityScore) return b.priorityScore - a.priorityScore;
       if (b.confidence !== a.confidence) return b.confidence - a.confidence;
       return new Date(b.latestDate) - new Date(a.latestDate);
     }).slice(0, 20);
@@ -331,11 +375,13 @@ export async function POST(request) {
         sourcesWithMatches: matchedDomains.size,
         publicationsReviewed: articles.length,
         relevantPublications: relevant.length,
-        eventsFound: events.length
+        eventsFound: events.length,
+        verifiedEvents: events.filter(function(event) { return event.status === "Подтверждено"; }).length,
+        highPriorityEvents: events.filter(function(event) { return event.priority === "Высокий"; }).length
       },
       sources: TRUSTED_SOURCES,
       fetchedAt: new Date().toISOString(),
-      methodology: "Событие считается подтвержденным, если найден официальный/реестровый источник или независимые подтверждения минимум из двух доверенных источников."
+      methodology: "Мы разделяем факт и стадию события: предложение не считается введенной мерой. Подтвержденным событие становится при официальном/реестровом источнике либо независимых подтверждениях минимум из двух доверенных источников."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
