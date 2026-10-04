@@ -14,14 +14,14 @@ function formatDate(value) {
   }
 }
 
-function makeLetter(company, events) {
-  const selected = events.slice(0, 5);
-  const topics = selected.map(function(event) {
-    return event.isSignal ? event.title.toLowerCase() : event.headline;
+function makeLetter(company, stories) {
+  const selected = stories.slice(0, 4);
+  const bullets = selected.map(function(story) {
+    return "— " + story.headline;
   });
   const products = Array.from(new Set(
-    selected.flatMap(function(event) {
-      return event.products || [];
+    selected.flatMap(function(story) {
+      return story.products || [];
     })
   )).slice(0, 5);
 
@@ -29,7 +29,7 @@ function makeLetter(company, events) {
     "Добрый день.",
     "",
     "Обратил внимание на несколько актуальных событий вокруг " + company.name + ":",
-    topics.map(function(topic) { return "— " + topic; }).join("\n"),
+    bullets.join("\n"),
     "",
     products.length
       ? "Хотел уточнить, могут ли в этой связи быть актуальны решения в части " + products.join(", ").toLowerCase() + "."
@@ -45,24 +45,13 @@ export default function Home() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
-  const [filter, setFilter] = useState("all");
   const [letterOpen, setLetterOpen] = useState(false);
   const [letter, setLetter] = useState("");
 
-  const visibleEvents = useMemo(function() {
+  const selectedStories = useMemo(function() {
     if (!data) return [];
-    if (filter === "signals") {
-      return data.events.filter(function(event) {
-        return event.isSignal;
-      });
-    }
-    return data.events;
-  }, [data, filter]);
-
-  const selectedEvents = useMemo(function() {
-    if (!data) return [];
-    return data.events.filter(function(event) {
-      return selected.includes(event.id);
+    return data.stories.filter(function(story) {
+      return selected.includes(story.id);
     });
   }, [data, selected]);
 
@@ -83,7 +72,6 @@ export default function Home() {
     setError(null);
     setData(null);
     setSelected([]);
-    setFilter("all");
 
     try {
       const response = await fetch("/api/analyze", {
@@ -95,12 +83,12 @@ export default function Home() {
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(payload.error || "Не удалось выполнить поиск.");
+        throw new Error(payload.error || "Не удалось выполнить анализ.");
       }
 
       setData(payload);
     } catch (e) {
-      setError(e.message || "Не удалось выполнить поиск.");
+      setError(e.message || "Не удалось выполнить анализ.");
     } finally {
       setLoading(false);
     }
@@ -115,11 +103,11 @@ export default function Home() {
   }
 
   function openLetter() {
-    const chosen = selectedEvents.length
-      ? selectedEvents
-      : data.events.filter(function(event) { return event.isSignal; }).slice(0, 3);
+    const chosen = selectedStories.length
+      ? selectedStories
+      : data.stories.slice(0, 3);
 
-    setLetter(makeLetter(data.company, chosen.length ? chosen : data.events.slice(0, 3)));
+    setLetter(makeLetter(data.company, chosen));
     setLetterOpen(true);
   }
 
@@ -128,15 +116,18 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">Свежие новости компании по ИНН</div>
+          <div className="headerNote">ИНН → компания → ключевые события</div>
         </div>
       </header>
 
       <section className={data ? "searchSection compactSearch" : "searchSection"}>
         {!data && (
           <>
-            <h1>Введите ИНН компании</h1>
-            <p>Определяем точное юрлицо и ищем свежие публикации о нём в Google News за последние 90 дней.</p>
+            <h1>Самое важное о компании</h1>
+            <p>
+              Введите ИНН. Мы определим юрлицо, соберём свежие публикации,
+              объединим одинаковые сюжеты и покажем только самые значимые.
+            </p>
           </>
         )}
 
@@ -152,7 +143,7 @@ export default function Home() {
             />
           </div>
           <button disabled={loading}>
-            {loading ? "Ищем новости…" : data ? "Найти другую компанию" : "Найти новости"}
+            {loading ? "Анализируем…" : data ? "Проверить другую компанию" : "Показать важное"}
           </button>
         </form>
       </section>
@@ -161,15 +152,15 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Ищем свежие публикации</strong>
-            <span>Сначала определяем компанию по ИНН, затем ищем новости по её точному названию.</span>
+            <strong>Собираем публикации и объединяем их в события</strong>
+            <span>Google News RU/EN + GDELT → дедупликация → рейтинг важности.</span>
           </div>
         </section>
       )}
 
       {error && (
         <section className="errorPanel">
-          <strong>Не получилось выполнить поиск</strong>
+          <strong>Не получилось выполнить анализ</strong>
           <p>{error}</p>
         </section>
       )}
@@ -195,86 +186,83 @@ export default function Home() {
           </section>
 
           <section className="simpleStats">
-            <div><strong>{data.stats.publicationsFound}</strong><span>публикаций найдено</span></div>
+            <div><strong>{data.stats.articlesCollected}</strong><span>публикаций собрано</span></div>
+            <div><strong>{data.stats.relevantArticles}</strong><span>относятся к компании</span></div>
+            <div><strong>{data.stats.importantStories}</strong><span>важных сюжетов</span></div>
             <div><strong>{data.stats.sourcesFound}</strong><span>источников</span></div>
-            <div><strong>{data.stats.signalsFound}</strong><span>банковских сигналов</span></div>
           </section>
 
           <section className="newsHeader">
             <div>
-              <h2>Новости</h2>
+              <h2>Главное</h2>
               <p>{data.methodology}</p>
-            </div>
-            <div className="viewTabs">
-              <button
-                className={filter === "all" ? "active" : ""}
-                onClick={function() { setFilter("all"); }}
-              >
-                Все {data.events.length}
-              </button>
-              <button
-                className={filter === "signals" ? "active" : ""}
-                onClick={function() { setFilter("signals"); }}
-              >
-                Сигналы {data.stats.signalsFound}
-              </button>
             </div>
           </section>
 
-          {visibleEvents.length === 0 ? (
+          {data.stories.length === 0 ? (
             <section className="emptyPanel">
-              <strong>Свежих публикаций не найдено</strong>
-              <p>Попробуйте другую компанию или повторите поиск позже.</p>
+              <strong>За последние 90 дней существенных публикаций не найдено</strong>
+              <p>Ничего не подставляем искусственно. Можно повторить поиск позже.</p>
             </section>
           ) : (
             <section className="newsList">
-              {visibleEvents.map(function(event) {
+              {data.stories.map(function(story, index) {
                 return (
-                  <article className="newsItem" key={event.id}>
-                    <label className="newsCheck">
+                  <article className="storyItem" key={story.id}>
+                    <label className="newsCheck" title="Добавить в письмо">
                       <input
                         type="checkbox"
-                        checked={selected.includes(event.id)}
-                        onChange={function() { toggle(event.id); }}
+                        checked={selected.includes(story.id)}
+                        onChange={function() { toggle(story.id); }}
                       />
                     </label>
+
+                    <div className="storyRank">{index + 1}</div>
 
                     <div className="newsContent">
                       <div className="newsTop">
                         <div className="newsBadges">
-                          <span className="categoryBadge">{event.category}</span>
-                          {event.factStageKey !== "reported" && (
-                            <span className={"stageBadge " + event.factStageKey}>{event.factStage}</span>
+                          <span className="categoryBadge">{story.category}</span>
+                          {story.factStageKey !== "reported" && (
+                            <span className={"stageBadge " + story.factStageKey}>
+                              {story.factStage}
+                            </span>
                           )}
                         </div>
-                        <time>{formatDate(event.latestDate)}</time>
+                        <div className="importance">{story.importance}/100</div>
                       </div>
 
-                      <h3>{event.headline}</h3>
+                      <h3>{story.headline}</h3>
 
-                      <div className="newsSourceLine">
-                        <span>{event.sourceName}</span>
-                        {event.url && (
-                          <a href={event.url} target="_blank" rel="noreferrer">Открыть источник ↗</a>
-                        )}
+                      <div className="storyMeta">
+                        <span>{formatDate(story.date)}</span>
+                        <span>{story.sourceCount} источн.</span>
                       </div>
 
-                      {event.isSignal && (
+                      {story.isSignal && (
                         <div className="signalBox">
-                          <div>
-                            <small>Сигнал</small>
-                            <b>{event.title}</b>
-                          </div>
-                          <p>{event.impact}</p>
-                          {event.products.length > 0 && (
+                          <small>Почему это важно</small>
+                          <p>{story.impact}</p>
+
+                          {story.products.length > 0 && (
                             <div className="productChips">
-                              {event.products.map(function(product) {
+                              {story.products.map(function(product) {
                                 return <span key={product}>{product}</span>;
                               })}
                             </div>
                           )}
                         </div>
                       )}
+
+                      <div className="sourceList">
+                        {story.sources.map(function(source, sourceIndex) {
+                          return source.url
+                            ? <a href={source.url} target="_blank" rel="noreferrer" key={sourceIndex}>
+                                {source.name || source.domain} ↗
+                              </a>
+                            : <span key={sourceIndex}>{source.name || source.domain}</span>;
+                        })}
+                      </div>
                     </div>
                   </article>
                 );
@@ -282,11 +270,11 @@ export default function Home() {
             </section>
           )}
 
-          {data.events.length > 0 && (
+          {data.stories.length > 0 && (
             <div className="letterBar">
               <div>
-                <strong>{selected.length ? "Выбрано новостей: " + selected.length : "Выберите новости для письма"}</strong>
-                <span>Письмо соберётся из отмеченных публикаций и найденных банковских сигналов.</span>
+                <strong>{selected.length ? "Выбрано событий: " + selected.length : "Выберите события для письма"}</strong>
+                <span>Можно отметить только те сюжеты, которые реально подходят для контакта с клиентом.</span>
               </div>
               <button onClick={openLetter}>Составить письмо</button>
             </div>
@@ -295,7 +283,8 @@ export default function Home() {
       )}
 
       <footer>
-        Client Radar использует публичные публикации. Банковские выводы являются гипотезами менеджеру и требуют проверки контекста источника.
+        Client Radar агрегирует публичные публикации и ранжирует их по значимости.
+        Банковские выводы являются гипотезами и требуют проверки первоисточника.
       </footer>
 
       {letterOpen && (
