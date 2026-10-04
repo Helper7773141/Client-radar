@@ -2,177 +2,274 @@
 
 import { useMemo, useState } from "react";
 
-const MODES = { bank: "🏦 Банк", investor: "📈 Инвестор", owner: "🏢 Собственник" };
-const QUICK = ["Северсталь", "X5", "Норникель", "Аэрофлот"];
-
-function fmtDate(value) {
-  try { return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value)); }
-  catch { return value; }
+function formatDate(value) {
+  try {
+    return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value));
+  } catch {
+    return "";
+  }
 }
 
-function buildLetter(company, events, recipient, manager, tone) {
-  const hello = recipient.trim() ? recipient.trim() + ", добрый день." : "Добрый день.";
-  const topics = events.slice(0, 3).map(function(e) {
-    return e.title.replace(/^Демонстрационный пример:\s*/i, "").replace(/[.!?]+$/g, "");
+function statusClass(status) {
+  return status === "Подтверждено" ? "verifiedEvent" : "reviewEvent";
+}
+
+function makeLetter(company, events) {
+  const topics = events.slice(0, 4).map(function(event) {
+    return event.title.toLowerCase();
   });
-  let topicText = "";
-  if (topics.length === 1) topicText = topics[0];
-  if (topics.length > 1) topicText = topics.slice(0, -1).join(", ") + " и " + topics[topics.length - 1];
-  const products = Array.from(new Set(events.flatMap(function(e) { return e.products || []; }))).slice(0, 4);
-  const parts = [
-    hello,
+  const products = Array.from(new Set(events.flatMap(function(event) { return event.products || []; }))).slice(0, 5);
+  return [
+    "Добрый день.",
     "",
-    topicText ? "Обратил внимание на публичные сообщения о " + topicText.charAt(0).toLowerCase() + topicText.slice(1) + "." : "Обратил внимание на несколько актуальных публичных событий вокруг " + company.name + ".",
+    "Обратил внимание на несколько актуальных событий, которые могут быть релевантны для " + company.name + ": " + topics.join(", ") + ".",
     "",
-    tone === "short"
-      ? "Хотел уточнить, могут ли в этой связи быть актуальны " + products.join(", ").toLowerCase() + "."
-      : "С учетом этих событий хотел уточнить, могут ли быть актуальны решения в части " + products.join(", ").toLowerCase() + ". Со своей стороны можем посмотреть возможную структуру и обсудить, какие инструменты действительно имеют смысл для текущих задач компании.",
+    "Хотел уточнить, могут ли в этой связи быть актуальны решения в части " + products.join(", ").toLowerCase() + ".",
     "",
-    tone === "friendly" ? "Если тема актуальна, давайте коротко созвонимся и сверим, где мы можем быть полезны." : "Если вопрос актуален, предлагаю коротко обсудить возможные варианты."
-  ];
-  if (manager.trim()) parts.push("", "С уважением,", manager.trim());
-  return parts.join("\n");
+    "Если вопрос актуален, предлагаю коротко обсудить возможные варианты."
+  ].join("\n");
 }
 
 export default function Home() {
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState("bank");
-  const [data, setData] = useState(null);
+  const [inn, setInn] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [filter, setFilter] = useState("Все");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
-  const [mailOpen, setMailOpen] = useState(false);
-  const [recipient, setRecipient] = useState("");
-  const [manager, setManager] = useState("");
-  const [tone, setTone] = useState("business");
+  const [letterOpen, setLetterOpen] = useState(false);
   const [letter, setLetter] = useState("");
 
-  const categories = useMemo(function() {
-    if (!data || !data.events || !data.events.length) return ["Все"];
-    return ["Все"].concat(Array.from(new Set(data.events.map(function(e) { return e.category; }))));
-  }, [data]);
-
-  const visible = useMemo(function() {
-    if (!data || !data.events) return [];
-    return filter === "Все" ? data.events : data.events.filter(function(e) { return e.category === filter; });
-  }, [data, filter]);
-
   const selectedEvents = useMemo(function() {
-    return (data && data.events ? data.events : []).filter(function(e) { return selected.includes(e.id); });
+    if (!data) return [];
+    return data.events.filter(function(event) { return selected.includes(event.id); });
   }, [data, selected]);
 
-  const productSummary = useMemo(function() {
-    const src = (data && data.events ? data.events : []).filter(function(e) { return e.confidence !== "Низкая"; });
-    const counts = new Map();
-    src.flatMap(function(e) { return e.products || []; }).forEach(function(p) { counts.set(p, (counts.get(p) || 0) + 1); });
-    return Array.from(counts.entries()).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 5).map(function(x) { return x[0]; });
-  }, [data]);
+  function normalizeInn(value) {
+    return String(value || "").replace(/\D/g, "").slice(0, 10);
+  }
 
-  async function analyze(value) {
-    const q = String(value !== undefined ? value : query).trim();
-    if (!q) return;
-    setQuery(q); setLoading(true); setError(""); setData(null); setSelected([]); setFilter("Все");
+  async function analyze(event) {
+    if (event) event.preventDefault();
+    const value = normalizeInn(inn);
+    if (value.length !== 10) {
+      setError({ message: "Введите 10-значный ИНН юридического лица.", code: "INVALID_INN" });
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setData(null);
+    setSelected([]);
+
     try {
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q }) });
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inn: value })
+      });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Ошибка анализа");
+      if (!response.ok) {
+        const e = new Error(payload.error || "Ошибка анализа");
+        e.code = payload.code;
+        throw e;
+      }
       setData(payload);
-    } catch (e) { setError(e.message || "Не удалось получить данные"); }
-    finally { setLoading(false); }
+    } catch (e) {
+      setError({ message: e.message, code: e.code || "ERROR" });
+    } finally {
+      setLoading(false);
+    }
   }
 
   function toggle(id) {
-    setSelected(function(prev) { return prev.includes(id) ? prev.filter(function(x) { return x !== id; }) : prev.concat(id); });
+    setSelected(function(prev) {
+      return prev.includes(id) ? prev.filter(function(x) { return x !== id; }) : prev.concat(id);
+    });
   }
 
-  function generateLetter() {
-    const events = selectedEvents.length ? selectedEvents : (data && data.events ? data.events.slice(0, 2) : []);
-    setLetter(buildLetter(data.company, events, recipient, manager, tone));
+  function openLetter() {
+    const chosen = selectedEvents.length ? selectedEvents : data.events.slice(0, 3);
+    setLetter(makeLetter(data.company, chosen));
+    setLetterOpen(true);
   }
-
-  function openMail() { generateLetter(); setMailOpen(true); }
-
-  const strong = data && data.events ? data.events.filter(function(e) { return e.confidence === "Высокая"; }).length : 0;
 
   return (
-    <main>
-      <header className="topbar">
-        <div className="brand"><span className="brandMark">CR</span><div><b>CLIENT RADAR</b><small>Публичные сигналы → коммерческие возможности</small></div></div>
-        <div className="modeSwitch">
-          {Object.entries(MODES).map(function(entry) {
-            return <button key={entry[0]} className={mode === entry[0] ? "active" : ""} onClick={function() { setMode(entry[0]); }}>{entry[1]}</button>;
-          })}
-        </div>
+    <main className="page">
+      <header className="header">
+        <div className="logo">CLIENT RADAR</div>
+        <div className="headerNote">Проверенные события для корпоративного менеджера</div>
       </header>
 
-      <section className="hero">
-        <div className="eyebrow">CLIENT INTELLIGENCE</div>
-        <h1>Поймите, <span>что предложить компании</span> прямо сейчас</h1>
-        <p>Введите название или ИНН. Client Radar собирает свежие публичные сигналы и переводит их в понятные поводы для разговора с клиентом.</p>
-        <form className="searchBox" onSubmit={function(e) { e.preventDefault(); analyze(); }}>
-          <input value={query} onChange={function(e) { setQuery(e.target.value); }} placeholder="Например: Северсталь или 3528000597" />
-          <button disabled={loading}>{loading ? "Анализируем…" : "Анализировать"}</button>
+      <section className="searchSection">
+        <h1>Введите ИНН компании</h1>
+        <p>Сначала идентифицируем юридическое лицо. Только после этого ищем и проверяем новости о компании, связанных лицах и отрасли.</p>
+        <form className="innForm" onSubmit={analyze}>
+          <input
+            inputMode="numeric"
+            value={inn}
+            onChange={function(e) { setInn(normalizeInn(e.target.value)); }}
+            placeholder="10 цифр"
+            aria-label="ИНН юридического лица"
+          />
+          <button disabled={loading}>{loading ? "Проверяем…" : "Найти и проанализировать"}</button>
         </form>
-        <div className="quick"><span>Попробовать:</span>{QUICK.map(function(name) { return <button key={name} onClick={function() { analyze(name); }}>{name}</button>; })}</div>
       </section>
 
-      {error && <div className="alert error">{error}</div>}
-
-      {loading && <section className="loadingCard"><div className="spinner" /><div><b>Ищем свежие сигналы</b><p>Проверяем открытые источники и классифицируем события.</p></div></section>}
-
-      {data && <>
-        <section className="company">
+      {loading && (
+        <section className="loadingPanel">
+          <div className="spinner" />
           <div>
-            <div className="statusRow"><span className={"status " + data.mode}>{data.mode === "live" ? "LIVE" : "DEMO"}</span>{data.dadataUsed && <span className="verified">Юрлицо подтверждено</span>}</div>
-            <h2>{data.company.name}</h2>
-            <div className="meta">{data.company.inn && <span>ИНН {data.company.inn}</span>}{data.company.ogrn && <span>ОГРН {data.company.ogrn}</span>}{data.company.region && <span>{data.company.region}</span>}{data.company.activity && <span>{data.company.activity}</span>}</div>
-            {data.notice && <p className="notice">{data.notice}</p>}
+            <strong>Идентифицируем компанию и проверяем источники</strong>
+            <span>Это может занять несколько секунд: источники опрашиваются независимо.</span>
           </div>
-          <button className="refresh" onClick={function() { analyze(query); }}>↻ Обновить</button>
         </section>
+      )}
 
-        <section className="summaryGrid">
-          <div className="metric"><strong>{data.events.length}</strong><span>событий найдено</span></div>
-          <div className="metric"><strong>{strong}</strong><span>сильных сигналов</span></div>
-          <div className="metric"><strong>{productSummary.length}</strong><span>ключевых продуктов</span></div>
-          <div className="opportunity"><small>Что стоит обсудить</small><div>{productSummary.length ? productSummary.map(function(p) { return <span key={p}>{p}</span>; }) : <em>Недостаточно сигналов</em>}</div></div>
+      {error && (
+        <section className="errorPanel">
+          <strong>{error.code === "CONFIG_REQUIRED" ? "Нужно один раз подключить идентификацию по ИНН" : "Не получилось выполнить анализ"}</strong>
+          <p>{error.message}</p>
+          {error.code === "CONFIG_REQUIRED" && (
+            <p className="setupHint">После добавления DADATA_TOKEN в Vercel этот экран исчезнет и поиск станет реальным. Демонстрационные данные больше не используются.</p>
+          )}
         </section>
+      )}
 
-        <section className="controls">
-          <div className="filters">{categories.map(function(cat) { return <button key={cat} onClick={function() { setFilter(cat); }} className={filter === cat ? "active" : ""}>{cat}</button>; })}</div>
-          <div className="selectedCount">Выбрано: <b>{selected.length}</b></div>
-        </section>
+      {data && (
+        <>
+          <section className="companyCard">
+            <div className="companyIdentity">
+              <div className="verifiedBadge">Юрлицо подтверждено по ИНН</div>
+              <h2>{data.company.name}</h2>
+              <div className="companyMeta">
+                <span>ИНН {data.company.inn}</span>
+                {data.company.ogrn && <span>ОГРН {data.company.ogrn}</span>}
+                {data.company.kpp && <span>КПП {data.company.kpp}</span>}
+                {data.company.okved && <span>ОКВЭД {data.company.okved}</span>}
+              </div>
+              {data.company.management && data.company.management.name && (
+                <div className="director">Руководитель: <b>{data.company.management.name}</b>{data.company.management.post ? " · " + data.company.management.post : ""}</div>
+              )}
+            </div>
+            <div className="period">Анализ: последние 90 дней</div>
+          </section>
 
-        {!data.events.length ? <div className="empty"><h3>Свежих публикаций не найдено</h3><p>Попробуйте другое написание компании. Для известных demo-компаний доступен резервный демонстрационный режим.</p></div> :
-          <section className="feed">{visible.map(function(event) {
-            return <article className="signal" key={event.id}>
-              <div className="signalTop"><div className="tags"><span className="category">{event.category}</span><span className={"confidence c" + event.confidence}>{event.confidence}</span>{event.isDemo && <span className="demoTag">Демонстрационные данные</span>}</div><time>{fmtDate(event.date)}</time></div>
-              <h3>{event.title}</h3>
-              <p className="summary">{event.summary}</p>
-              <div className="analysis"><small>{mode === "bank" ? "Возможный банковский сигнал" : mode === "investor" ? "Взгляд инвестора" : "Взгляд собственника"}</small><p>{event[mode]}</p></div>
-              <div className="products"><small>{mode === "bank" ? "Что можно обсудить" : "Ключевые темы"}</small><div>{event.products.map(function(p) { return <span key={p}>{p}</span>; })}</div></div>
-              <div className="signalFooter"><label className="check"><input type="checkbox" checked={selected.includes(event.id)} onChange={function() { toggle(event.id); }} /> Использовать в письме</label>{event.url ? <a href={event.url} target="_blank" rel="noreferrer">{event.sourceName} ↗</a> : <span className="source">{event.sourceName}</span>}</div>
-            </article>;
-          })}</section>
-        }
+          <section className="stats">
+            <div><strong>{data.stats.sourcesInContour}</strong><span>источников в контуре</span></div>
+            <div><strong>{data.stats.sourcesWithMatches}</strong><span>дали релевантные публикации</span></div>
+            <div><strong>{data.stats.publicationsReviewed}</strong><span>публикаций просмотрено</span></div>
+            <div><strong>{data.stats.eventsFound}</strong><span>значимых событий</span></div>
+          </section>
 
-        {data.events.length > 0 && <div className="mailBar"><div><b>{selected.length ? "Выбрано событий: " + selected.length : "Можно выбрать события галочками"}</b><span>Соберём черновик письма без платного AI.</span></div><button onClick={openMail}>✉ Составить письмо</button></div>}
-      </>}
+          {data.relations && data.relations.length > 0 && (
+            <details className="relations">
+              <summary>Связанные лица и учредители, подтвержденные источником</summary>
+              <div className="relationList">
+                {data.relations.map(function(item, index) {
+                  return <div key={index}><span>{item.type}</span><b>{item.name}</b>{item.detail && <small>{item.detail}</small>}</div>;
+                })}
+              </div>
+            </details>
+          )}
 
-      <footer>Client Radar использует публично доступную информацию. Выводы о возможных потребностях компании являются аналитическими гипотезами и требуют проверки клиентским менеджером.</footer>
+          <section className="eventsHeader">
+            <div>
+              <h2>Что произошло</h2>
+              <p>{data.methodology}</p>
+            </div>
+            {data.events.length > 0 && <div className="selectedLabel">Выбрано: {selected.length}</div>}
+          </section>
 
-      {mailOpen && <div className="modalBackdrop" onMouseDown={function() { setMailOpen(false); }}><div className="modal" onMouseDown={function(e) { e.stopPropagation(); }}>
-        <div className="modalHead"><div><small>CLIENT RADAR</small><h2>Черновик письма</h2></div><button onClick={function() { setMailOpen(false); }}>×</button></div>
-        <div className="mailFields">
-          <input value={recipient} onChange={function(e) { setRecipient(e.target.value); }} placeholder="Имя получателя, например Иван Иванович" />
-          <input value={manager} onChange={function(e) { setManager(e.target.value); }} placeholder="Ваше имя" />
-          <select value={tone} onChange={function(e) { setTone(e.target.value); }}><option value="business">Деловой</option><option value="short">Короткий</option><option value="friendly">Дружелюбный</option></select>
-          <button className="secondary" onClick={generateLetter}>Сформировать заново</button>
+          {data.events.length === 0 ? (
+            <section className="emptyPanel">
+              <strong>Значимых подтвержденных событий не найдено</strong>
+              <p>Это лучше, чем показывать нерелевантный шум. Мы не подставляем вымышленные новости.</p>
+            </section>
+          ) : (
+            <section className="eventList">
+              {data.events.map(function(event) {
+                return (
+                  <article className="eventRow" key={event.id}>
+                    <label className="eventCheck">
+                      <input type="checkbox" checked={selected.includes(event.id)} onChange={function() { toggle(event.id); }} />
+                    </label>
+                    <details className="eventDetails">
+                      <summary>
+                        <div className="eventMain">
+                          <div className="eventTitleLine">
+                            <h3>{event.title}</h3>
+                            {event.scope && <span className="scopeBadge">{event.scope}</span>}
+                          </div>
+                          <div className="eventMeta">
+                            <span className={statusClass(event.status)}>{event.status}</span>
+                            <span>{event.confidence}% уверенность</span>
+                            <span>{event.sourceCount} источн.</span>
+                            <span>{formatDate(event.latestDate)}</span>
+                          </div>
+                        </div>
+                        <div className="chevron">⌄</div>
+                      </summary>
+
+                      <div className="eventBody">
+                        <div className="evidence">
+                          <small>Основание</small>
+                          <p>{event.evidenceHeadline}</p>
+                        </div>
+                        <div className="impact">
+                          <small>Почему это важно</small>
+                          <p>{event.impact}</p>
+                        </div>
+                        <div className="products">
+                          <small>Что можно обсудить с клиентом</small>
+                          <div>{event.products.map(function(product) { return <span key={product}>{product}</span>; })}</div>
+                        </div>
+                        <div className="sources">
+                          <small>Подтверждения</small>
+                          {event.sources.map(function(source, index) {
+                            return source.url
+                              ? <a href={source.url} target="_blank" rel="noreferrer" key={index}>{source.name || source.domain} <span>↗</span></a>
+                              : <span key={index}>{source.name || source.domain}</span>;
+                          })}
+                        </div>
+                      </div>
+                    </details>
+                  </article>
+                );
+              })}
+            </section>
+          )}
+
+          {data.events.length > 0 && (
+            <div className="letterBar">
+              <div>
+                <strong>{selected.length ? "Событий выбрано: " + selected.length : "Выберите нужные события"}</strong>
+                <span>Из них можно собрать короткий черновик клиентского письма.</span>
+              </div>
+              <button onClick={openLetter}>Составить письмо</button>
+            </div>
+          )}
+        </>
+      )}
+
+      <footer>
+        Система показывает только публичные сигналы. Оценка влияния — аналитическая гипотеза, а не утверждение о финансовом состоянии или потребности клиента.
+      </footer>
+
+      {letterOpen && (
+        <div className="modalBackdrop" onMouseDown={function() { setLetterOpen(false); }}>
+          <div className="modal" onMouseDown={function(e) { e.stopPropagation(); }}>
+            <div className="modalHeader">
+              <h2>Черновик письма</h2>
+              <button onClick={function() { setLetterOpen(false); }}>×</button>
+            </div>
+            <textarea value={letter} onChange={function(e) { setLetter(e.target.value); }} />
+            <div className="modalActions">
+              <button onClick={function() { navigator.clipboard.writeText(letter); }}>Копировать</button>
+              <a href={"mailto:?subject=" + encodeURIComponent("Актуальные направления для обсуждения") + "&body=" + encodeURIComponent(letter)}>Открыть в почте</a>
+            </div>
+          </div>
         </div>
-        <textarea value={letter} onChange={function(e) { setLetter(e.target.value); }} />
-        <div className="modalActions"><button className="secondary" onClick={function() { navigator.clipboard.writeText(letter); }}>Копировать</button><a className="primaryLink" href={"mailto:?subject=" + encodeURIComponent("Возможные направления сотрудничества") + "&body=" + encodeURIComponent(letter)}>Открыть в почте</a></div>
-      </div></div>}
+      )}
     </main>
   );
 }
