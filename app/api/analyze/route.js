@@ -157,6 +157,15 @@ function parseExternalDate(value) {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
+function isWithinLookback(value, days) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = Date.now();
+  const earliest = now - days * 24 * 60 * 60 * 1000;
+  const latest = now + 24 * 60 * 60 * 1000;
+  return date.getTime() >= earliest && date.getTime() <= latest;
+}
+
 async function gdelt(query, scope) {
   const params = new URLSearchParams({
     query: query,
