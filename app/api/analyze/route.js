@@ -3,7 +3,7 @@ import { classifyHeadline, detectFactStage } from "../../../lib/intelligence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 20;
+export const maxDuration = 25;
 
 const LOOKBACK_DAYS = 90;
 
@@ -32,29 +32,57 @@ function clean(value) {
 
 function compactName(name) {
   return String(name || "")
-    .replace(/\b(ПАО|АО|ООО|ОАО|ЗАО|НАО)\b/gi, "")
+    .replace(/\b(ПАО|АО|ООО|ОАО|ЗАО|НАО|PJSC|JSC|LLC)\b/gi, "")
     .replace(/[«»"]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function importantTokens(name) {
-  const stop = new Set([
-    "пао","ао","ооо","оао","зао","нао","публичное","акционерное",
-    "общество","компания","группа","холдинг"
-  ]);
-  return compactName(name)
-    .toLowerCase()
-    .split(/[^a-zа-яё0-9]+/i)
-    .filter(function(token) {
-      return token.length >= 3 && !stop.has(token);
-    })
-    .slice(0, 6);
+function transliterate(value) {
+  const map = {
+    а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"e",ж:"zh",з:"z",и:"i",й:"y",
+    к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",
+    х:"kh",ц:"ts",ч:"ch",ш:"sh",щ:"sch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya"
+  };
+  return String(value || "").toLowerCase().split("").map(function(ch) {
+    return map[ch] !== undefined ? map[ch] : ch;
+  }).join("").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function aliasesFor(profile) {
+  const aliases = [];
+  const shortName = compactName(profile.name);
+  const fullName = compactName(profile.fullName);
+  const latin = compactName(profile.latinName);
+
+  [shortName, fullName, latin].forEach(function(value) {
+    if (value && value.length >= 3) aliases.push(value);
+  });
+
+  const translit = transliterate(shortName);
+  if (translit && translit.length >= 3) {
+    aliases.push(translit);
+    if (translit.startsWith("fos")) {
+      aliases.push("ph" + translit.slice(1));
+    }
+  }
+
+  return Array.from(new Set(aliases.map(function(x) {
+    return x.trim();
+  }).filter(Boolean))).slice(0, 5);
 }
 
 function parseDate(value) {
-  const parsed = new Date(String(value || ""));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const raw = String(value || "");
+  if (/^\d{8}T\d{6}Z$/.test(raw)) {
+    const iso =
+      raw.slice(0,4) + "-" + raw.slice(4,6) + "-" + raw.slice(6,8) +
+      "T" + raw.slice(9,11) + ":" + raw.slice(11,13) + ":" + raw.slice(13,15) + "Z";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function withinLookback(value) {
@@ -66,9 +94,7 @@ function withinLookback(value) {
 
 async function safeFetch(url, options, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(function() {
-    controller.abort();
-  }, timeoutMs || 6500);
+  const timer = setTimeout(function() { controller.abort(); }, timeoutMs || 7000);
   try {
     return await fetch(url, Object.assign({}, options || {}, {
       signal: controller.signal,
@@ -106,9 +132,7 @@ async function resolveCompany(inn) {
     6500
   );
 
-  if (!response.ok) {
-    throw new Error("Не удалось определить компанию по ИНН.");
-  }
+  if (!response.ok) throw new Error("Не удалось определить компанию по ИНН.");
 
   const payload = await response.json();
   const suggestion = (payload.suggestions || []).find(function(item) {
@@ -122,16 +146,15 @@ async function resolveCompany(inn) {
   }
 
   const d = suggestion.data;
-
   return {
     inn: d.inn,
     kpp: d.kpp || null,
     ogrn: d.ogrn || null,
     name: (d.name && (d.name.short_with_opf || d.name.full_with_opf)) || suggestion.value,
     fullName: (d.name && d.name.full_with_opf) || suggestion.unrestricted_value || suggestion.value,
+    latinName: d.name && d.name.latin ? d.name.latin : null,
     status: d.state && d.state.status ? d.state.status : null,
     okved: d.okved || null,
-    address: d.address && d.address.value ? d.address.value : null,
     management: d.management ? {
       name: d.management.name || null,
       post: d.management.post || null
@@ -152,13 +175,9 @@ function xmlSource(block) {
   const name = clean(match[2]) || "Источник";
   const urlMatch = match[1].match(/url=["']([^"']+)["']/i);
   let domain = "";
-
   if (urlMatch) {
-    try {
-      domain = new URL(urlMatch[1]).hostname.replace(/^www\./, "");
-    } catch {}
+    try { domain = new URL(urlMatch[1]).hostname.replace(/^www\./, ""); } catch {}
   }
-
   return { name: name, domain: domain };
 }
 
@@ -166,137 +185,252 @@ function stripSourceSuffix(title, sourceName) {
   const value = clean(title);
   const source = clean(sourceName);
   if (!source) return value;
-
   const suffix = " - " + source;
-  if (value.toLowerCase().endsWith(suffix.toLowerCase())) {
-    return value.slice(0, -suffix.length).trim();
-  }
-  return value;
+  return value.toLowerCase().endsWith(suffix.toLowerCase())
+    ? value.slice(0, -suffix.length).trim()
+    : value;
 }
 
-async function googleNews(query, scope) {
-  const boundedQuery = query + " when:" + LOOKBACK_DAYS + "d";
+async function googleNews(query, locale, scope) {
+  const localeParams = locale === "en"
+    ? "&hl=en-US&gl=US&ceid=US:en"
+    : "&hl=ru&gl=RU&ceid=RU:ru";
   const url =
     "https://news.google.com/rss/search?q=" +
-    encodeURIComponent(boundedQuery) +
-    "&hl=ru&gl=RU&ceid=RU:ru";
+    encodeURIComponent(query + " when:" + LOOKBACK_DAYS + "d") +
+    localeParams;
 
   const response = await safeFetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 ClientRadar/3.0"
-    }
+    headers: { "User-Agent": "Mozilla/5.0 ClientRadar/4.0" }
   }, 6500);
 
-  if (!response.ok) {
-    throw new Error("Google News временно недоступен.");
-  }
+  if (!response.ok) throw new Error("Google News HTTP " + response.status);
 
   const xml = await response.text();
   const blocks = xml.match(/<item>[\s\S]*?<\/item>/gi) || [];
 
-  return blocks.slice(0, 80).map(function(block, index) {
+  return blocks.slice(0, 100).map(function(block, index) {
     const source = xmlSource(block);
-    const rawTitle = xmlTag(block, "title");
-    const title = stripSourceSuffix(rawTitle, source.name);
-    const pubDate = xmlTag(block, "pubDate");
-
+    const title = stripSourceSuffix(xmlTag(block, "title"), source.name);
+    const date = xmlTag(block, "pubDate");
     return {
       id: "gn-" + scope + "-" + index,
       title: title,
       description: xmlTag(block, "description"),
-      date: pubDate,
+      date: date,
       sourceName: source.name,
       domain: source.domain,
       url: xmlTag(block, "link") || null,
-      scope: scope
+      channel: "Google News"
     };
   }).filter(function(item) {
     return item.title && withinLookback(item.date);
   });
 }
 
-function newsQueries(profile) {
-  const exact = compactName(profile.name);
-  const full = compactName(profile.fullName);
-  const queries = [];
+async function gdelt(aliases) {
+  const query = "(" + aliases.slice(0, 4).map(function(alias) {
+    return '"' + alias + '"';
+  }).join(" OR ") + ")";
 
-  if (exact) queries.push('"' + exact + '"');
-  if (full && full.toLowerCase() !== exact.toLowerCase()) {
-    queries.push('"' + full + '"');
-  }
+  const params = new URLSearchParams({
+    query: query,
+    mode: "ArtList",
+    maxrecords: "100",
+    format: "json",
+    sort: "DateDesc",
+    timespan: "3months"
+  });
 
-  const tokens = importantTokens(profile.name);
-  if (tokens.length >= 2) {
-    queries.push(tokens.slice(0, 3).map(function(token) {
-      return '"' + token + '"';
-    }).join(" "));
-  }
+  const response = await safeFetch(
+    "https://api.gdeltproject.org/api/v2/doc/doc?" + params.toString(),
+    { headers: { "User-Agent": "ClientRadar/4.0" } },
+    7000
+  );
 
-  return Array.from(new Set(queries)).slice(0, 3);
+  if (!response.ok) throw new Error("GDELT HTTP " + response.status);
+  const payload = await response.json();
+
+  return (Array.isArray(payload.articles) ? payload.articles : []).map(function(article, index) {
+    return {
+      id: "gd-" + index,
+      title: clean(article.title),
+      description: "",
+      date: article.seendate || "",
+      sourceName: article.domain || "GDELT",
+      domain: article.domain || "",
+      url: article.url || null,
+      channel: "GDELT"
+    };
+  }).filter(function(item) {
+    return item.title && withinLookback(item.date);
+  });
 }
 
-function relevantToCompany(item, profile) {
-  const text = (
-    String(item.title || "") + " " +
-    String(item.description || "")
-  ).toLowerCase();
-
-  const exact = compactName(profile.name).toLowerCase();
-  if (exact && text.includes(exact)) return true;
-
-  const tokens = importantTokens(profile.name);
-  if (!tokens.length) return true;
-
-  const matches = tokens.filter(function(token) {
-    return text.includes(token);
-  }).length;
-
-  if (tokens.length === 1) return matches === 1;
-  return matches >= Math.min(2, tokens.length);
-}
-
-function normalizedTitle(title) {
-  return String(title || "")
+function normalized(value) {
+  return String(value || "")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function dedupe(items) {
-  const seen = new Set();
-
-  return items.filter(function(item) {
-    const key = normalizedTitle(item.title);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+function tokenSet(value) {
+  const stop = new Set([
+    "компания","компании","россия","россии","сообщил","сообщила","заявил","заявила",
+    "новый","новая","новые","будет","может","после","для","что","как","при","это"
+  ]);
+  return new Set(normalized(value).split(" ").filter(function(token) {
+    return token.length >= 4 && !stop.has(token);
+  }));
 }
 
-function buildEvent(article, index) {
-  const analysis = classifyHeadline(
-    article.title + " " + (article.description || "")
-  );
-  const stage = detectFactStage(
-    article.title + " " + (article.description || "")
+function similarity(a, b) {
+  const aa = tokenSet(a);
+  const bb = tokenSet(b);
+  if (!aa.size || !bb.size) return 0;
+  let common = 0;
+  aa.forEach(function(token) {
+    if (bb.has(token)) common += 1;
+  });
+  return common / Math.max(aa.size, bb.size);
+}
+
+function relevanceScore(article, profile, aliases) {
+  const title = normalized(article.title);
+  const description = normalized(article.description);
+  const text = title + " " + description;
+  let score = 0;
+
+  aliases.forEach(function(alias) {
+    const a = normalized(alias);
+    if (!a) return;
+    if (title.includes(a)) score += 6;
+    else if (text.includes(a)) score += 3;
+  });
+
+  if (profile.inn && text.includes(profile.inn)) score += 10;
+
+  if (profile.management && profile.management.name) {
+    const surname = normalized(profile.management.name).split(" ")[0];
+    if (surname && surname.length >= 4 && text.includes(surname)) score += 2;
+  }
+
+  return score;
+}
+
+function dedupe(items) {
+  const seen = new Set();
+  const out = [];
+
+  items.forEach(function(item) {
+    const key = normalized(item.title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(item);
+  });
+
+  return out;
+}
+
+const CATEGORY_WEIGHT = {
+  "Санкции / ограничения": 100,
+  "Налоги / регуляторика": 96,
+  "M&A / собственность": 94,
+  "CAPEX / инвестиции": 92,
+  "Долг / финансирование": 90,
+  "Кредитный профиль": 89,
+  "Финансовые результаты": 88,
+  "Контракты": 85,
+  "ВЭД": 84,
+  "Регулирование / господдержка": 83,
+  "Суды / споры": 80,
+  "Производство / продажи": 78,
+  "Логистика": 75,
+  "Менеджмент / управление": 72,
+  "Ликвидность": 70,
+  "Новости компании": 45
+};
+
+function recencyScore(value) {
+  const date = parseDate(value);
+  if (!date) return 0;
+  const age = Math.max(0, Date.now() - date.getTime());
+  const days = age / (24 * 60 * 60 * 1000);
+  return Math.max(0, 20 - Math.floor(days / 5));
+}
+
+function clusterArticles(articles) {
+  const clusters = [];
+
+  articles.forEach(function(article) {
+    const analysis = classifyHeadline(article.title + " " + (article.description || ""));
+    const category = analysis ? analysis.category : "Новости компании";
+
+    const existing = clusters.find(function(cluster) {
+      return cluster.category === category &&
+        similarity(cluster.articles[0].title, article.title) >= 0.34;
+    });
+
+    if (existing) {
+      existing.articles.push(article);
+    } else {
+      clusters.push({
+        category: category,
+        analysis: analysis,
+        articles: [article]
+      });
+    }
+  });
+
+  return clusters;
+}
+
+function buildStory(cluster, index) {
+  const articles = cluster.articles.slice().sort(function(a,b) {
+    return (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0);
+  });
+  const representative = articles[0];
+
+  const sources = [];
+  const sourceSet = new Set();
+  articles.forEach(function(article) {
+    const key = (article.domain || article.sourceName || "").toLowerCase();
+    if (!key || sourceSet.has(key)) return;
+    sourceSet.add(key);
+    sources.push({
+      name: article.sourceName,
+      domain: article.domain,
+      url: article.url
+    });
+  });
+
+  const analysis = cluster.analysis;
+  const stage = detectFactStage(articles.map(function(a) {
+    return a.title + " " + (a.description || "");
+  }).join(" "));
+  const categoryWeight = CATEGORY_WEIGHT[cluster.category] || 45;
+  const sourceBonus = Math.min(15, Math.max(0, sources.length - 1) * 5);
+  const importance = Math.min(
+    100,
+    categoryWeight + sourceBonus + recencyScore(representative.date)
   );
 
   return {
-    id: "event-" + index,
-    title: analysis ? analysis.shortTitle : article.title,
-    headline: article.title,
-    category: analysis ? analysis.category : "Новости компании",
+    id: "story-" + index,
+    category: cluster.category,
+    headline: representative.title,
+    summary: representative.title,
+    date: parseDate(representative.date)?.toISOString() || new Date().toISOString(),
+    sourceCount: sources.length,
+    sources: sources,
     factStage: stage.label,
     factStageKey: stage.key,
-    latestDate: new Date(article.date).toISOString(),
-    sourceName: article.sourceName,
-    domain: article.domain,
-    url: article.url,
     impact: analysis
       ? analysis.impact
-      : "Свежая публикация о компании. Откройте источник, чтобы понять контекст и решить, есть ли повод для контакта.",
+      : "Свежий сюжет о компании. Рекомендуется открыть первоисточник и оценить, создает ли он повод для контакта.",
     products: analysis ? analysis.products : [],
+    importance: importance,
     isSignal: Boolean(analysis)
   };
 }
@@ -314,51 +448,67 @@ export async function POST(request) {
     }
 
     const profile = await resolveCompany(inn);
-    const queries = newsQueries(profile);
+    const aliases = aliasesFor(profile);
+    const primary = aliases[0] || compactName(profile.name);
+    const latin = aliases.find(function(alias) {
+      return /^[a-z0-9 .&-]+$/i.test(alias);
+    });
 
-    const settled = await Promise.allSettled(
-      queries.map(function(query, index) {
-        return googleNews(query, "q" + index);
-      })
-    );
+    const jobs = [
+      googleNews('"' + primary + '"', "ru", "ru-exact"),
+      googleNews(primary, "ru", "ru-broad"),
+      gdelt(aliases)
+    ];
 
-    let articles = [];
+    if (latin) {
+      jobs.push(googleNews(latin, "en", "en-broad"));
+    }
+
+    const settled = await Promise.allSettled(jobs);
+    let rawArticles = [];
+
     settled.forEach(function(result) {
       if (result.status === "fulfilled") {
-        articles = articles.concat(result.value);
+        rawArticles = rawArticles.concat(result.value);
       }
     });
 
-    articles = dedupe(articles)
-      .filter(function(item) {
-        return relevantToCompany(item, profile);
-      })
-      .sort(function(a, b) {
-        return new Date(b.date) - new Date(a.date);
-      })
-      .slice(0, 40);
+    const collected = dedupe(rawArticles);
+    const relevant = collected.filter(function(article) {
+      return relevanceScore(article, profile, aliases) >= 3;
+    });
 
-    const events = articles.map(buildEvent);
-    const sources = Array.from(new Set(
-      events.map(function(event) {
-        return event.sourceName;
-      }).filter(Boolean)
-    ));
+    const stories = clusterArticles(relevant)
+      .map(buildStory)
+      .sort(function(a,b) {
+        if (b.importance !== a.importance) return b.importance - a.importance;
+        return new Date(b.date) - new Date(a.date);
+      });
+
+    const important = stories.filter(function(story) {
+      return story.isSignal || story.importance >= 65;
+    }).slice(0, 10);
+
+    const fallback = stories.slice(0, 10);
+    const finalStories = important.length >= 4 ? important : fallback;
 
     return NextResponse.json({
       company: profile,
-      events: events,
+      stories: finalStories,
       stats: {
-        publicationsFound: events.length,
-        sourcesFound: sources.length,
-        signalsFound: events.filter(function(event) {
-          return event.isSignal;
-        }).length
+        articlesCollected: collected.length,
+        relevantArticles: relevant.length,
+        storiesFound: stories.length,
+        importantStories: finalStories.length,
+        sourcesFound: new Set(relevant.map(function(a) {
+          return a.domain || a.sourceName;
+        }).filter(Boolean)).size
       },
-      fetchedAt: new Date().toISOString(),
+      aliases: aliases,
       lookbackDays: LOOKBACK_DAYS,
+      fetchedAt: new Date().toISOString(),
       methodology:
-        "Сначала показываем свежие новости Google News по точно определенному юрлицу. Категория и банковский смысл добавляются поверх новости и не могут скрыть саму публикацию."
+        "Собираем публикации Google News на русском и английском плюс GDELT, объединяем дубли в сюжеты и показываем до 10 самых значимых по типу события, свежести и числу независимых источников."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
