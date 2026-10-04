@@ -142,6 +142,17 @@ async function googleNews(query, scope) {
   }).filter(function(x) { return x.title; });
 }
 
+function parseExternalDate(value) {
+  const raw = String(value || "");
+  if (/^\d{8}T\d{6}Z$/.test(raw)) {
+    const iso = raw.slice(0,4) + "-" + raw.slice(4,6) + "-" + raw.slice(6,8) + "T" + raw.slice(9,11) + ":" + raw.slice(11,13) + ":" + raw.slice(13,15) + "Z";
+    const parsed = new Date(iso);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
 async function gdelt(query, scope) {
   const params = new URLSearchParams({
     query: query,
@@ -160,7 +171,7 @@ async function gdelt(query, scope) {
       id: "gd-" + scope + "-" + index,
       title: clean(a.title),
       description: "",
-      date: a.seendate ? new Date(a.seendate).toISOString() : new Date().toISOString(),
+      date: parseExternalDate(a.seendate),
       sourceName: a.domain || "GDELT",
       domain: a.domain || "",
       url: a.url || null,
