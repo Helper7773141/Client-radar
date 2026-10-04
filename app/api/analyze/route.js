@@ -204,7 +204,7 @@ function stripSourceSuffix(title, sourceName) {
   return value;
 }
 
-async function googleNews(query, locale, scope) {
+async function googleNews(query, locale, scope, searchMode) {
   const localeParams = locale === "en"
     ? "&hl=en-US&gl=US&ceid=US:en"
     : "&hl=ru&gl=RU&ceid=RU:ru";
@@ -236,7 +236,51 @@ async function googleNews(query, locale, scope) {
       sourceName: source.name,
       domain: source.domain,
       url: xmlTag(block, "link") || null,
-      official: false
+      official: false,
+      searchMode: searchMode || "broad"
+    };
+  }).filter(function(item) {
+    return item.title && withinLookback(item.date);
+  });
+}
+
+
+async function bingNews(query, scope) {
+  const url =
+    "https://www.bing.com/news/search?q=" +
+    encodeURIComponent(query) +
+    "&format=rss&setlang=ru-ru";
+
+  const response = await safeFetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 ClientRadar/7.0" }
+  }, 5000);
+
+  if (!response.ok) throw new Error("Bing News HTTP " + response.status);
+
+  const xml = await response.text();
+  const blocks = xml.match(/<item>[\s\S]*?<\/item>/gi) || [];
+
+  return blocks.slice(0, 80).map(function(block, index) {
+    const title = xmlTag(block, "title");
+    const link = xmlTag(block, "link");
+    const description = xmlTag(block, "description");
+    const pubDate = xmlTag(block, "pubDate");
+    let domain = "";
+
+    try {
+      domain = new URL(link).hostname.replace(/^www\./, "");
+    } catch {}
+
+    return {
+      id: "bing-" + scope + "-" + index,
+      title: title,
+      description: description,
+      date: pubDate,
+      sourceName: domain || "Bing News",
+      domain: domain,
+      url: link || null,
+      official: false,
+      searchMode: "exact"
     };
   }).filter(function(item) {
     return item.title && withinLookback(item.date);
@@ -275,7 +319,8 @@ async function gdelt(aliases) {
       sourceName: article.domain || "GDELT",
       domain: article.domain || "",
       url: article.url || null,
-      official: false
+      official: false,
+      searchMode: "discovery"
     };
   }).filter(function(item) {
     return item.title && withinLookback(item.date);
@@ -449,18 +494,29 @@ function articleLinks(html, origin) {
   }).slice(0, 80);
 }
 
+function articleQuality(item) {
+  let score = 0;
+  if (item.official) score += 100;
+  if (item.url && !String(item.url).includes("news.google.com")) score += 20;
+  if (clean(item.description).length >= 80) score += 10;
+  if (item.searchMode === "exact") score += 5;
+  return score;
+}
+
 function dedupe(items) {
-  const seen = new Set();
-  const out = [];
+  const byTitle = new Map();
 
   items.forEach(function(item) {
     const key = normalize(item.title);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push(item);
+    if (!key) return;
+
+    const existing = byTitle.get(key);
+    if (!existing || articleQuality(item) > articleQuality(existing)) {
+      byTitle.set(key, item);
+    }
   });
 
-  return out;
+  return Array.from(byTitle.values());
 }
 
 async function officialNews(profile, aliases) {
@@ -513,7 +569,8 @@ async function officialNews(profile, aliases) {
         sourceName: "Официальный сайт",
         domain: new URL(site.origin).hostname.replace(/^www\./, ""),
         url: item.url,
-        official: true
+        official: true,
+        searchMode: "official"
       });
     });
   });
@@ -738,6 +795,26 @@ async function enrichStory(story) {
   return story;
 }
 
+
+function eventQueries(primary) {
+  const name = '"' + primary + '"';
+  return [
+    name + " (облигации OR кредит OR рейтинг OR рефинансирование OR дивиденды OR прибыль OR EBITDA)",
+    name + " (инвестиции OR строительство OR модернизация OR производство OR продажи OR экспорт OR импорт)",
+    name + " (контракт OR тендер OR сделка OR акционер OR директор OR санкции OR налог OR суд)"
+  ];
+}
+
+function likelyOfficialDomains(profile, aliases) {
+  const slugs = candidateDomainSlugs(profile, aliases);
+  const out = [];
+  slugs.slice(0, 3).forEach(function(slug) {
+    out.push(slug + ".ru");
+    out.push(slug + ".com");
+  });
+  return Array.from(new Set(out)).slice(0, 4);
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -758,13 +835,25 @@ export async function POST(request) {
     });
 
     const searchJobs = [
-      googleNews('"' + primary + '"', "ru", "ru-exact"),
-      googleNews(primary, "ru", "ru-broad"),
+      googleNews('"' + primary + '"', "ru", "ru-exact", "exact"),
+      googleNews(primary, "ru", "ru-broad", "broad"),
+      bingNews('"' + primary + '"', "exact"),
       gdelt(aliases)
     ];
 
+    eventQueries(primary).forEach(function(query, index) {
+      searchJobs.push(googleNews(query, "ru", "ru-event-" + index, "exact"));
+    });
+
+    likelyOfficialDomains(profile, aliases).slice(0, 2).forEach(function(domain, index) {
+      searchJobs.push(
+        googleNews('"' + primary + '" site:' + domain, "ru", "ru-site-" + index, "exact")
+      );
+    });
+
     if (latin) {
-      searchJobs.push(googleNews(latin, "en", "en-broad"));
+      searchJobs.push(googleNews('"' + latin + '"', "en", "en-exact", "exact"));
+      searchJobs.push(bingNews('"' + latin + '"', "en-exact"));
     }
 
     const results = await Promise.all([
@@ -788,7 +877,9 @@ export async function POST(request) {
     const collected = dedupe(raw);
 
     const relevant = collected.filter(function(article) {
-      return article.official || relevanceScore(article, profile, aliases) >= 2;
+      if (article.official) return true;
+      if (article.searchMode === "exact") return true;
+      return relevanceScore(article, profile, aliases) >= 1;
     });
 
     let stories = clusterArticles(relevant)
@@ -816,7 +907,7 @@ export async function POST(request) {
       lookbackDays: LOOKBACK_DAYS,
       fetchedAt: new Date().toISOString(),
       methodology:
-        "Собираем публикации из нескольких новостных каналов и, когда удается определить официальный сайт, из пресс-центра самой компании. Склеиваем дубли и показываем до 10 главных сюжетов с короткой выжимкой."
+        "Собираем точные и тематические запросы по установленной компании из нескольких новостных каналов, добавляем официальный сайт, если он найден, склеиваем дубли и показываем до 10 главных сюжетов с короткой выжимкой."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
