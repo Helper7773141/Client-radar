@@ -11,6 +11,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const LOOKBACK_DAYS = 90;
 
@@ -125,7 +126,7 @@ function xmlTag(block, name) {
 async function googleNews(query, scope) {
   const boundedQuery = String(query || "").includes("when:") ? query : query + " when:" + LOOKBACK_DAYS + "d";
   const url = "https://news.google.com/rss/search?q=" + encodeURIComponent(boundedQuery) + "&hl=ru&gl=RU&ceid=RU:ru";
-  const response = await safeFetch(url, { headers: { "User-Agent": "Mozilla/5.0 ClientRadar/2.0" } }, 9000);
+  const response = await safeFetch(url, { headers: { "User-Agent": "Mozilla/5.0 ClientRadar/2.0" } }, 5000);
   if (!response.ok) throw new Error("Google News HTTP " + response.status);
   const xml = await response.text();
   const blocks = xml.match(/<item>[\s\S]*?<\/item>/gi) || [];
@@ -165,7 +166,7 @@ async function gdelt(query, scope) {
     sort: "DateDesc",
     timespan: "3months"
   });
-  const response = await safeFetch("https://api.gdeltproject.org/api/v2/doc/doc?" + params.toString(), { headers: { "User-Agent": "ClientRadar/2.0" } }, 10000);
+  const response = await safeFetch("https://api.gdeltproject.org/api/v2/doc/doc?" + params.toString(), { headers: { "User-Agent": "ClientRadar/2.0" } }, 6000);
   if (!response.ok) throw new Error("GDELT HTTP " + response.status);
   const payload = await response.json();
   const articles = Array.isArray(payload.articles) ? payload.articles : [];
@@ -217,7 +218,7 @@ function buildCompanyQuery(profile) {
 function domainGroups() {
   const domains = TRUSTED_SOURCES.map(function(x) { return x.domain; });
   const groups = [];
-  for (let i = 0; i < domains.length; i += 5) groups.push(domains.slice(i, i + 5));
+  for (let i = 0; i < domains.length; i += 8) groups.push(domains.slice(i, i + 8));
   return groups;
 }
 
@@ -233,15 +234,9 @@ function buildSectorQuery(profile) {
   return sector + " " + events;
 }
 
-function targetedCompanyQueries(profile) {
+function targetedCompanyQuery(profile) {
   const base = buildCompanyQuery(profile);
-  return [
-    base + " (инвестиции OR модернизация OR строительство OR завод OR оборудование OR CAPEX)",
-    base + " (кредит OR заем OR облигации OR рефинансирование OR дивиденды OR ликвидность)",
-    base + " (экспорт OR импорт OR контракт OR тендер OR поставки OR логистика)",
-    base + " (приобретение OR продажа доли OR совместное предприятие OR директор OR совет директоров)",
-    base + " (выручка OR EBITDA OR прибыль OR рейтинг OR суд OR иск)"
-  ];
+  return base + " (инвестиции OR модернизация OR строительство OR кредит OR облигации OR экспорт OR импорт OR контракт OR логистика OR приобретение OR директор OR выручка OR EBITDA OR прибыль OR рейтинг OR суд OR иск)";
 }
 
 function relatedQueries(profile) {
@@ -256,15 +251,7 @@ function relatedQueries(profile) {
     });
   }
 
-  (profile.founders || []).slice(0, 3).forEach(function(founder) {
-    if (!founder.name) return;
-    queries.push({
-      query: '"' + founder.name + '" "' + companyToken + '"',
-      label: "Связь через учредителя"
-    });
-  });
-
-  return queries;
+  return queries.slice(0, 1);
 }
 
 function profileRelations(profile) {
@@ -316,9 +303,7 @@ export async function POST(request) {
       gdelt(baseQuery, "company")
     ];
 
-    targetedCompanyQueries(profile).forEach(function(query, index) {
-      jobs.push(googleNews(query, "company-targeted-" + index));
-    });
+    jobs.push(googleNews(targetedCompanyQuery(profile), "company-targeted"));
 
     relatedQueries(profile).forEach(function(item, index) {
       jobs.push(googleNews(item.query, "related:" + index + ":" + item.label));
@@ -350,7 +335,7 @@ export async function POST(request) {
 
     const relevant = filterCompanyItems(articles, profile);
     const companyArticles = relevant.filter(function(x) {
-      return x.scope === "company" || String(x.scope || "").startsWith("company-targeted-");
+      return x.scope === "company" || String(x.scope || "").startsWith("company-targeted");
     });
     const sectorArticles = relevant.filter(function(x) { return x.scope === "sector"; });
     const relatedArticles = relevant.filter(function(x) { return String(x.scope || "").startsWith("related:"); });
