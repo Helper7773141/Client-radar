@@ -147,13 +147,46 @@ async function resolveCompany(inn) {
 
   const founders = Array.isArray(d.founders)
     ? d.founders.map(function(founder) {
+        let share = null;
+        if (founder.share) {
+          if (founder.share.type === "PERCENT" && founder.share.value != null) {
+            share = String(founder.share.value) + "%";
+          } else if (
+            founder.share.type === "FRACTION" &&
+            founder.share.numerator != null &&
+            founder.share.denominator != null
+          ) {
+            share = founder.share.numerator + "/" + founder.share.denominator;
+          } else if (founder.share.value != null) {
+            share = String(founder.share.value);
+          }
+        }
+
         return {
           name:
             founder.name ||
             (founder.fio
               ? [founder.fio.surname, founder.fio.name, founder.fio.patronymic].filter(Boolean).join(" ")
               : null),
-          inn: founder.inn || null
+          inn: founder.inn || null,
+          ogrn: founder.ogrn || null,
+          type: founder.type || null,
+          share: share
+        };
+      }).filter(function(x) { return x.name; }).slice(0, 8)
+    : [];
+
+  const managers = Array.isArray(d.managers)
+    ? d.managers.map(function(manager) {
+        return {
+          name:
+            manager.name ||
+            (manager.fio
+              ? [manager.fio.surname, manager.fio.name, manager.fio.patronymic].filter(Boolean).join(" ")
+              : null),
+          inn: manager.inn || null,
+          type: manager.type || null,
+          post: manager.post || null
         };
       }).filter(function(x) { return x.name; }).slice(0, 6)
     : [];
@@ -169,7 +202,186 @@ async function resolveCompany(inn) {
     management: d.management
       ? { name: d.management.name || null, post: d.management.post || null }
       : null,
-    founders: founders
+    founders: founders,
+    managers: managers,
+    employees: d.employee_count ?? null,
+    capital: d.capital && d.capital.value != null ? d.capital.value : null,
+    revenue: d.finance && d.finance.revenue != null ? d.finance.revenue : null,
+    income: d.finance && d.finance.income != null ? d.finance.income : null,
+    financeYear: d.finance && d.finance.year != null ? d.finance.year : null,
+    branchCount: d.branch_count ?? 0
+  };
+}
+
+
+async function findAffiliated(inn, scope, count) {
+  const token = process.env.DADATA_TOKEN;
+  if (!token || !inn) return [];
+
+  const response = await safeFetch(
+    "https://suggestions.dadata.ru/suggestions/api/4_1/rs/findAffiliated/party",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Token " + token
+      },
+      body: JSON.stringify({
+        query: inn,
+        scope: scope,
+        count: count || 20
+      })
+    },
+    6000
+  );
+
+  if (!response.ok) throw new Error("DaData affiliated HTTP " + response.status);
+  const payload = await response.json();
+  return Array.isArray(payload.suggestions) ? payload.suggestions : [];
+}
+
+function affiliateFromSuggestion(item, parentInn) {
+  const d = item && item.data ? item.data : {};
+  const founder = (d.founders || []).find(function(f) {
+    return f.inn === parentInn;
+  });
+
+  let share = null;
+  if (founder && founder.share) {
+    if (founder.share.type === "PERCENT" && founder.share.value != null) {
+      share = String(founder.share.value) + "%";
+    } else if (
+      founder.share.type === "FRACTION" &&
+      founder.share.numerator != null &&
+      founder.share.denominator != null
+    ) {
+      share = founder.share.numerator + "/" + founder.share.denominator;
+    }
+  }
+
+  const managerLink = !founder && (d.managers || []).some(function(m) {
+    return m.inn === parentInn;
+  });
+
+  return {
+    inn: d.inn || null,
+    name:
+      (d.name && (d.name.short_with_opf || d.name.full_with_opf)) ||
+      item.value ||
+      null,
+    status: d.state && d.state.status ? d.state.status : null,
+    okved: d.okved || null,
+    share: share,
+    link: founder ? "Учредитель" : managerLink ? "Руководитель" : null
+  };
+}
+
+function exactPeople(profile) {
+  const people = [];
+  const seen = new Set();
+
+  function add(person) {
+    if (!person || !person.name) return;
+    const key = (person.inn || person.name) + "|" + person.type;
+    if (seen.has(key)) return;
+    seen.add(key);
+    people.push(person);
+  }
+
+  (profile.managers || []).forEach(function(manager) {
+    add({
+      type: "Руководитель",
+      name: manager.name,
+      inn: manager.inn || null,
+      post: manager.post || null,
+      share: null
+    });
+  });
+
+  if (!people.length && profile.management && profile.management.name) {
+    add({
+      type: "Руководитель",
+      name: profile.management.name,
+      inn: null,
+      post: profile.management.post || null,
+      share: null
+    });
+  }
+
+  (profile.founders || []).forEach(function(founder) {
+    add({
+      type: "Учредитель",
+      name: founder.name,
+      inn: founder.inn || null,
+      post: null,
+      share: founder.share || null
+    });
+  });
+
+  return people;
+}
+
+async function resolveCorporateNetwork(profile) {
+  const people = exactPeople(profile);
+  let subsidiaries = [];
+  const relatedCompanies = [];
+
+  const peopleWithInn = people.filter(function(person) {
+    return person.inn && person.inn !== profile.inn;
+  }).slice(0, 4);
+
+  const jobs = [
+    findAffiliated(profile.inn, ["FOUNDERS"], 20),
+    ...peopleWithInn.map(function(person) {
+      return findAffiliated(person.inn, ["MANAGERS", "FOUNDERS"], 12);
+    })
+  ];
+
+  const settled = await Promise.allSettled(jobs);
+
+  if (settled[0] && settled[0].status === "fulfilled") {
+    subsidiaries = settled[0].value
+      .filter(function(item) {
+        return item.data && item.data.inn && item.data.inn !== profile.inn;
+      })
+      .map(function(item) {
+        return affiliateFromSuggestion(item, profile.inn);
+      })
+      .filter(function(item) { return item.name; })
+      .slice(0, 12);
+  }
+
+  peopleWithInn.forEach(function(person, index) {
+    const result = settled[index + 1];
+    if (!result || result.status !== "fulfilled") return;
+
+    result.value
+      .filter(function(item) {
+        return item.data &&
+          item.data.inn &&
+          item.data.inn !== profile.inn &&
+          !subsidiaries.some(function(sub) {
+            return sub.inn === item.data.inn;
+          });
+      })
+      .slice(0, 8)
+      .forEach(function(item) {
+        const company = affiliateFromSuggestion(item, person.inn);
+        if (company.name) {
+          relatedCompanies.push({
+            via: person.name,
+            role: person.type,
+            company: company
+          });
+        }
+      });
+  });
+
+  return {
+    people: people,
+    subsidiaries: subsidiaries,
+    relatedCompanies: relatedCompanies.slice(0, 16)
   };
 }
 
@@ -693,25 +905,6 @@ async function enrichCluster(c) {
   };
 }
 
-function relations(profile) {
-  const out = [];
-  if (profile.management && profile.management.name) {
-    out.push({
-      type: "Руководитель",
-      name: profile.management.name
-    });
-  }
-
-  (profile.founders || []).forEach(function(founder) {
-    out.push({
-      type: "Учредитель",
-      name: founder.name
-    });
-  });
-
-  return out;
-}
-
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -725,7 +918,14 @@ export async function POST(request) {
     }
 
     const profile = await resolveCompany(inn);
-    const identity = await discoverIdentity(profile);
+    const resolved = await Promise.all([
+      discoverIdentity(profile),
+      resolveCorporateNetwork(profile).catch(function() {
+        return { people: exactPeople(profile), subsidiaries: [], relatedCompanies: [] };
+      })
+    ]);
+    const identity = resolved[0];
+    const network = resolved[1];
     const aliases = buildAliases(profile, identity);
 
     const mainAlias = aliases[0] || compactLegalName(profile.name);
@@ -754,6 +954,17 @@ export async function POST(request) {
       jobs.push(bingNews('"' + latinAlias + '"', true));
     }
 
+    network.people
+      .filter(function(person) {
+        return person.inn && person.name;
+      })
+      .slice(0, 2)
+      .forEach(function(person) {
+        const query = '"' + person.name + '" "' + mainAlias + '"';
+        jobs.push(googleNews(query, "ru", true));
+        jobs.push(bingNews(query, true));
+      });
+
     const settled = await Promise.allSettled(jobs);
 
     let all = [];
@@ -778,7 +989,9 @@ export async function POST(request) {
     return NextResponse.json({
       company: profile,
       aliases: aliases,
-      relations: relations(profile),
+      relations: network.people,
+      subsidiaries: network.subsidiaries,
+      relatedCompanies: network.relatedCompanies,
       events: events,
       stats: {
         collected: collected.length,
@@ -787,7 +1000,7 @@ export async function POST(request) {
       },
       lookbackDays: LOOKBACK_DAYS,
       methodology:
-        "Собираем точные запросы по рабочим названиям компании из нескольких новостных каналов и доверенных доменов, склеиваем одинаковые публикации в одно событие и выводим их по времени."
+        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам из нескольких новостных каналов и доверенных доменов. Дубли склеиваем, события выводим по времени."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
