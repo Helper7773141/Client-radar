@@ -12,6 +12,8 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const LOOKBACK_DAYS = 90;
+
 function validCompanyInn(inn) {
   if (!/^\d{10}$/.test(inn)) return false;
   const digits = inn.split("").map(Number);
@@ -121,7 +123,8 @@ function xmlTag(block, name) {
 }
 
 async function googleNews(query, scope) {
-  const url = "https://news.google.com/rss/search?q=" + encodeURIComponent(query) + "&hl=ru&gl=RU&ceid=RU:ru";
+  const boundedQuery = String(query || "").includes("when:") ? query : query + " when:" + LOOKBACK_DAYS + "d";
+  const url = "https://news.google.com/rss/search?q=" + encodeURIComponent(boundedQuery) + "&hl=ru&gl=RU&ceid=RU:ru";
   const response = await safeFetch(url, { headers: { "User-Agent": "Mozilla/5.0 ClientRadar/2.0" } }, 9000);
   if (!response.ok) throw new Error("Google News HTTP " + response.status);
   const xml = await response.text();
@@ -133,7 +136,7 @@ async function googleNews(query, scope) {
       id: "gn-" + scope + "-" + index,
       title: xmlTag(block, "title"),
       description: xmlTag(block, "description"),
-      date: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
+      date: parseExternalDate(pubDate),
       sourceName: source.name,
       domain: source.domain,
       url: xmlTag(block, "link") || null,
@@ -230,6 +233,17 @@ function buildSectorQuery(profile) {
   return sector + " " + events;
 }
 
+function targetedCompanyQueries(profile) {
+  const base = buildCompanyQuery(profile);
+  return [
+    base + " (инвестиции OR модернизация OR строительство OR завод OR оборудование OR CAPEX)",
+    base + " (кредит OR заем OR облигации OR рефинансирование OR дивиденды OR ликвидность)",
+    base + " (экспорт OR импорт OR контракт OR тендер OR поставки OR логистика)",
+    base + " (приобретение OR продажа доли OR совместное предприятие OR директор OR совет директоров)",
+    base + " (выручка OR EBITDA OR прибыль OR рейтинг OR суд OR иск)"
+  ];
+}
+
 function relatedQueries(profile) {
   const companyToken = coreCompanyTokens(profile.name)[0];
   if (!companyToken) return [];
@@ -302,6 +316,10 @@ export async function POST(request) {
       gdelt(baseQuery, "company")
     ];
 
+    targetedCompanyQueries(profile).forEach(function(query, index) {
+      jobs.push(googleNews(query, "company-targeted-" + index));
+    });
+
     relatedQueries(profile).forEach(function(item, index) {
       jobs.push(googleNews(item.query, "related:" + index + ":" + item.label));
       jobs.push(gdelt(item.query, "related:" + index + ":" + item.label));
@@ -323,8 +341,17 @@ export async function POST(request) {
     });
 
     articles = dedupeArticles(articles);
+    const publicationsCollected = articles.length;
+    const recentArticles = articles.filter(function(item) {
+      return isWithinLookback(item.date, LOOKBACK_DAYS);
+    });
+    const oldPublicationsDropped = publicationsCollected - recentArticles.length;
+    articles = recentArticles;
+
     const relevant = filterCompanyItems(articles, profile);
-    const companyArticles = relevant.filter(function(x) { return x.scope === "company"; });
+    const companyArticles = relevant.filter(function(x) {
+      return x.scope === "company" || String(x.scope || "").startsWith("company-targeted-");
+    });
     const sectorArticles = relevant.filter(function(x) { return x.scope === "sector"; });
     const relatedArticles = relevant.filter(function(x) { return String(x.scope || "").startsWith("related:"); });
 
@@ -373,6 +400,8 @@ export async function POST(request) {
       stats: {
         sourcesInContour: TRUSTED_SOURCES.length,
         sourcesWithMatches: matchedDomains.size,
+        publicationsCollected: publicationsCollected,
+        oldPublicationsDropped: oldPublicationsDropped,
         publicationsReviewed: articles.length,
         relevantPublications: relevant.length,
         eventsFound: events.length,
@@ -381,6 +410,7 @@ export async function POST(request) {
       },
       sources: TRUSTED_SOURCES,
       fetchedAt: new Date().toISOString(),
+      lookbackDays: LOOKBACK_DAYS,
       methodology: "Мы разделяем факт и стадию события: предложение не считается введенной мерой. Подтвержденным событие становится при официальном/реестровом источнике либо независимых подтверждениях минимум из двух доверенных источников."
     });
   } catch (error) {
