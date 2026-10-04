@@ -357,27 +357,45 @@ function looksGeneric(name) {
 function extractBrandCandidates(items, legalName) {
   const stop = new Set([
     "rusprofile","checko","sbis","audit","wikipedia","spark","инн","ооо","пао",
-    "company","компания","россия","россии","телефон","адрес","реквизиты"
+    "company","компания","russia","russian","online","official","site","website",
+    "internet","resheniya","solutions","group","holding","service","services"
   ]);
-  const legalTokens = new Set(normalize(legalName).split(" "));
-  const counts = new Map();
 
-  items.forEach(function(item) {
-    const text = clean(item.title + " " + item.description);
-    const tokens = text.match(/\b[A-Za-z][A-Za-z0-9.-]{2,}\b/g) || [];
-
-    const unique = new Set(tokens.map(function(x) { return x.replace(/[.,:;!?]+$/g, ""); }));
-    unique.forEach(function(token) {
-      const key = token.toLowerCase();
-      if (stop.has(key) || legalTokens.has(key)) return;
-      counts.set(token, (counts.get(token) || 0) + 1);
-    });
+  normalize(legalName).split(" ").forEach(function(token) {
+    if (token) stop.add(token);
+  });
+  transliterate(legalName).split(" ").forEach(function(token) {
+    if (token) stop.add(token);
   });
 
-  return Array.from(counts.entries())
+  const scores = new Map();
+
+  function add(token, points) {
+    const cleaned = String(token || "").replace(/[.,:;!?()[\]{}]+$/g, "");
+    const key = cleaned.toLowerCase();
+    if (cleaned.length < 3 || cleaned.length > 30 || stop.has(key)) return;
+    scores.set(cleaned, (scores.get(cleaned) || 0) + points);
+  }
+
+  items.forEach(function(item) {
+    const titleTokens = clean(item.title).match(/\b[A-Za-z][A-Za-z0-9.-]{2,}\b/g) || [];
+    const bodyTokens = clean(item.description).match(/\b[A-Za-z][A-Za-z0-9.-]{2,}\b/g) || [];
+
+    new Set(titleTokens).forEach(function(token) { add(token, 3); });
+    new Set(bodyTokens).forEach(function(token) { add(token, 1); });
+
+    if (item.domain && !DIRECTORY_DOMAINS.some(function(domain) {
+      return item.domain === domain || item.domain.endsWith("." + domain);
+    })) {
+      const base = item.domain.split(".")[0];
+      add(base, 2);
+    }
+  });
+
+  return Array.from(scores.entries())
     .sort(function(a,b) { return b[1] - a[1]; })
-    .filter(function(x) { return x[1] >= 2; })
-    .map(function(x) { return x[0]; })
+    .filter(function(item) { return item[1] >= 3; })
+    .map(function(item) { return item[0]; })
     .slice(0, 3);
 }
 
@@ -548,9 +566,37 @@ function cluster(items) {
 }
 
 function eventTitle(cluster) {
+  const text = normalize(cluster.items.map(function(item) {
+    return item.title;
+  }).join(" "));
+
+  if (text.includes("облигац")) {
+    if (text.includes("рейтинг")) return "Рейтинг выпуска облигаций";
+    if (text.includes("размещ") || text.includes("выпуск")) return "Выпуск облигаций";
+    if (text.includes("купон")) return "Выплата купона по облигациям";
+    return "Облигации";
+  }
+  if (text.includes("дивиденд")) return "Дивиденды";
+  if (text.includes("рейтинг")) return "Изменение кредитного рейтинга";
+  if (text.includes("экспорт") || text.includes("поставк")) return "Изменение экспортных поставок";
+  if (text.includes("контракт") || text.includes("тендер")) return "Новый контракт";
+  if (text.includes("инвест") || text.includes("модерниз") || text.includes("строительств")) {
+    return "Инвестиционный проект";
+  }
+  if (text.includes("санкц")) return "Санкционные изменения";
+  if (text.includes("налог") || text.includes("ндпи") || text.includes("пошлин")) {
+    return "Изменение налоговой нагрузки";
+  }
+  if (text.includes("прибыл") || text.includes("ebitda") || text.includes("выручк")) {
+    return "Финансовые результаты";
+  }
+  if (text.includes("иск") || text.includes("суд")) return "Судебный спор";
+  if (text.includes("директор") || text.includes("руковод")) return "Изменение руководства";
+
   if (cluster.analysis && cluster.analysis.shortTitle) {
     return cluster.analysis.shortTitle;
   }
+
   return cluster.items[0].title;
 }
 
@@ -623,7 +669,14 @@ async function enrichCluster(c) {
     const alternative = sorted
       .map(function(item) { return stripBoilerplate(item.description, item.title); })
       .find(function(x) { return x.length >= 50; });
-    summary = alternative || representative.title;
+
+    const alternateHeadline = sorted
+      .map(function(item) { return clean(item.title); })
+      .find(function(title) {
+        return normalize(title) !== normalize(eventTitle(c));
+      });
+
+    summary = alternative || alternateHeadline || representative.title;
   }
 
   const newest = c.items.slice().sort(function(a,b) {
@@ -682,21 +735,21 @@ export async function POST(request) {
       jobs.push(googleNews('"' + alias + '"', "ru", true));
       jobs.push(bingNews('"' + alias + '"', true));
       jobs.push(gdelt(alias));
+    });
 
-      eventQueries(alias).forEach(function(query) {
-        jobs.push(googleNews(query, "ru", true));
-      });
+    eventQueries(mainAlias).forEach(function(query) {
+      jobs.push(googleNews(query, "ru", true));
+    });
 
-      trustedDomainQueries(alias).forEach(function(query) {
-        jobs.push(googleNews(query, "ru", true));
-      });
+    trustedDomainQueries(mainAlias).forEach(function(query) {
+      jobs.push(googleNews(query, "ru", true));
     });
 
     const latinAlias = aliases.find(function(alias) {
       return /^[a-z0-9 .&-]+$/i.test(alias);
     });
 
-    if (latinAlias) {
+    if (latinAlias && latinAlias.toLowerCase() !== mainAlias.toLowerCase()) {
       jobs.push(googleNews('"' + latinAlias + '"', "en", true));
       jobs.push(bingNews('"' + latinAlias + '"', true));
     }
