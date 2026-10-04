@@ -9,12 +9,12 @@ const LOOKBACK_DAYS = 90;
 
 function validCompanyInn(inn) {
   if (!/^\d{10}$/.test(inn)) return false;
-  const digits = inn.split("").map(Number);
-  const weights = [2,4,10,3,5,9,4,6,8];
-  const checksum = (weights.reduce(function(sum, w, i) {
-    return sum + w * digits[i];
+  const d = inn.split("").map(Number);
+  const w = [2,4,10,3,5,9,4,6,8];
+  const c = (w.reduce(function(sum, weight, i) {
+    return sum + weight * d[i];
   }, 0) % 11) % 10;
-  return checksum === digits[9];
+  return c === d[9];
 }
 
 function clean(value) {
@@ -26,6 +26,14 @@ function clean(value) {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalize(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -50,24 +58,21 @@ function transliterate(value) {
 }
 
 function aliasesFor(profile) {
-  const aliases = [];
+  const out = [];
   const shortName = compactName(profile.name);
   const fullName = compactName(profile.fullName);
-  const latin = compactName(profile.latinName);
 
-  [shortName, fullName, latin].forEach(function(value) {
-    if (value && value.length >= 3) aliases.push(value);
+  [shortName, fullName].forEach(function(value) {
+    if (value && value.length >= 3) out.push(value);
   });
 
-  const translit = transliterate(shortName);
-  if (translit && translit.length >= 3) {
-    aliases.push(translit);
-    if (translit.startsWith("fos")) {
-      aliases.push("ph" + translit.slice(1));
-    }
+  const latin = transliterate(shortName);
+  if (latin) {
+    out.push(latin);
+    if (latin.startsWith("fos")) out.push("ph" + latin.slice(1));
   }
 
-  return Array.from(new Set(aliases.map(function(x) {
+  return Array.from(new Set(out.map(function(x) {
     return x.trim();
   }).filter(Boolean))).slice(0, 5);
 }
@@ -78,11 +83,11 @@ function parseDate(value) {
     const iso =
       raw.slice(0,4) + "-" + raw.slice(4,6) + "-" + raw.slice(6,8) +
       "T" + raw.slice(9,11) + ":" + raw.slice(11,13) + ":" + raw.slice(13,15) + "Z";
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? null : d;
+    const parsed = new Date(iso);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function withinLookback(value) {
@@ -94,7 +99,10 @@ function withinLookback(value) {
 
 async function safeFetch(url, options, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(function() { controller.abort(); }, timeoutMs || 7000);
+  const timer = setTimeout(function() {
+    controller.abort();
+  }, timeoutMs || 6500);
+
   try {
     return await fetch(url, Object.assign({}, options || {}, {
       signal: controller.signal,
@@ -152,7 +160,6 @@ async function resolveCompany(inn) {
     ogrn: d.ogrn || null,
     name: (d.name && (d.name.short_with_opf || d.name.full_with_opf)) || suggestion.value,
     fullName: (d.name && d.name.full_with_opf) || suggestion.unrestricted_value || suggestion.value,
-    latinName: d.name && d.name.latin ? d.name.latin : null,
     status: d.state && d.state.status ? d.state.status : null,
     okved: d.okved || null,
     management: d.management ? {
@@ -175,9 +182,13 @@ function xmlSource(block) {
   const name = clean(match[2]) || "Источник";
   const urlMatch = match[1].match(/url=["']([^"']+)["']/i);
   let domain = "";
+
   if (urlMatch) {
-    try { domain = new URL(urlMatch[1]).hostname.replace(/^www\./, ""); } catch {}
+    try {
+      domain = new URL(urlMatch[1]).hostname.replace(/^www\./, "");
+    } catch {}
   }
+
   return { name: name, domain: domain };
 }
 
@@ -185,23 +196,26 @@ function stripSourceSuffix(title, sourceName) {
   const value = clean(title);
   const source = clean(sourceName);
   if (!source) return value;
+
   const suffix = " - " + source;
-  return value.toLowerCase().endsWith(suffix.toLowerCase())
-    ? value.slice(0, -suffix.length).trim()
-    : value;
+  if (value.toLowerCase().endsWith(suffix.toLowerCase())) {
+    return value.slice(0, -suffix.length).trim();
+  }
+  return value;
 }
 
 async function googleNews(query, locale, scope) {
   const localeParams = locale === "en"
     ? "&hl=en-US&gl=US&ceid=US:en"
     : "&hl=ru&gl=RU&ceid=RU:ru";
+
   const url =
     "https://news.google.com/rss/search?q=" +
     encodeURIComponent(query + " when:" + LOOKBACK_DAYS + "d") +
     localeParams;
 
   const response = await safeFetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 ClientRadar/4.0" }
+    headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" }
   }, 6500);
 
   if (!response.ok) throw new Error("Google News HTTP " + response.status);
@@ -213,6 +227,7 @@ async function googleNews(query, locale, scope) {
     const source = xmlSource(block);
     const title = stripSourceSuffix(xmlTag(block, "title"), source.name);
     const date = xmlTag(block, "pubDate");
+
     return {
       id: "gn-" + scope + "-" + index,
       title: title,
@@ -221,7 +236,7 @@ async function googleNews(query, locale, scope) {
       sourceName: source.name,
       domain: source.domain,
       url: xmlTag(block, "link") || null,
-      channel: "Google News"
+      official: false
     };
   }).filter(function(item) {
     return item.title && withinLookback(item.date);
@@ -244,7 +259,7 @@ async function gdelt(aliases) {
 
   const response = await safeFetch(
     "https://api.gdeltproject.org/api/v2/doc/doc?" + params.toString(),
-    { headers: { "User-Agent": "ClientRadar/4.0" } },
+    { headers: { "User-Agent": "ClientRadar/6.0" } },
     7000
   );
 
@@ -260,63 +275,178 @@ async function gdelt(aliases) {
       sourceName: article.domain || "GDELT",
       domain: article.domain || "",
       url: article.url || null,
-      channel: "GDELT"
+      official: false
     };
   }).filter(function(item) {
     return item.title && withinLookback(item.date);
   });
 }
 
-function normalized(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function candidateDomainSlugs(profile, aliases) {
+  const values = aliases.slice();
+  values.push(transliterate(compactName(profile.name)));
+
+  const slugs = [];
+  values.forEach(function(value) {
+    const slug = String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (slug.length >= 3 && slug.length <= 30) slugs.push(slug);
+    if (slug.startsWith("fos")) slugs.push("ph" + slug.slice(1));
+  });
+
+  return Array.from(new Set(slugs)).slice(0, 5);
 }
 
-function tokenSet(value) {
-  const stop = new Set([
-    "компания","компании","россия","россии","сообщил","сообщила","заявил","заявила",
-    "новый","новая","новые","будет","может","после","для","что","как","при","это"
-  ]);
-  return new Set(normalized(value).split(" ").filter(function(token) {
-    return token.length >= 4 && !stop.has(token);
+function mentionsCompany(text, aliases) {
+  const value = normalize(text);
+  return aliases.some(function(alias) {
+    const a = normalize(alias);
+    return a.length >= 3 && value.includes(a);
+  });
+}
+
+async function discoverOfficialSite(profile, aliases) {
+  const slugs = candidateDomainSlugs(profile, aliases);
+  const urls = [];
+
+  slugs.forEach(function(slug) {
+    urls.push("https://" + slug + ".ru");
+    urls.push("https://" + slug + ".com");
+  });
+
+  const checks = await Promise.allSettled(urls.slice(0, 8).map(async function(url) {
+    const response = await safeFetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" },
+      redirect: "follow"
+    }, 2400);
+
+    if (!response.ok) throw new Error("not ok");
+
+    const html = await response.text();
+    const sample = clean(html.slice(0, 220000));
+    if (!mentionsCompany(sample, aliases)) throw new Error("wrong domain");
+
+    return {
+      origin: new URL(response.url || url).origin,
+      html: html
+    };
   }));
-}
 
-function similarity(a, b) {
-  const aa = tokenSet(a);
-  const bb = tokenSet(b);
-  if (!aa.size || !bb.size) return 0;
-  let common = 0;
-  aa.forEach(function(token) {
-    if (bb.has(token)) common += 1;
-  });
-  return common / Math.max(aa.size, bb.size);
-}
-
-function relevanceScore(article, profile, aliases) {
-  const title = normalized(article.title);
-  const description = normalized(article.description);
-  const text = title + " " + description;
-  let score = 0;
-
-  aliases.forEach(function(alias) {
-    const a = normalized(alias);
-    if (!a) return;
-    if (title.includes(a)) score += 6;
-    else if (text.includes(a)) score += 3;
-  });
-
-  if (profile.inn && text.includes(profile.inn)) score += 10;
-
-  if (profile.management && profile.management.name) {
-    const surname = normalized(profile.management.name).split(" ")[0];
-    if (surname && surname.length >= 4 && text.includes(surname)) score += 2;
+  for (const result of checks) {
+    if (result.status === "fulfilled") return result.value;
   }
 
-  return score;
+  return null;
+}
+
+function absoluteUrl(href, origin) {
+  try {
+    return new URL(href, origin).toString();
+  } catch {
+    return null;
+  }
+}
+
+function parseRussianDate(text) {
+  const value = clean(text);
+  const months = {
+    "января":0,"февраля":1,"марта":2,"апреля":3,"мая":4,"июня":5,
+    "июля":6,"августа":7,"сентября":8,"октября":9,"ноября":10,"декабря":11
+  };
+
+  const ru = value.match(/(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+(20\d{2})/i);
+  if (ru) {
+    return new Date(Date.UTC(
+      Number(ru[3]),
+      months[ru[2].toLowerCase()],
+      Number(ru[1])
+    )).toISOString();
+  }
+
+  const numeric = value.match(/\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/);
+  if (numeric) {
+    return new Date(Date.UTC(
+      Number(numeric[3]),
+      Number(numeric[2]) - 1,
+      Number(numeric[1])
+    )).toISOString();
+  }
+
+  return null;
+}
+
+function listingLinks(html, origin) {
+  const out = [];
+  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = re.exec(html))) {
+    const href = absoluteUrl(match[1], origin);
+    const text = clean(match[2]).toLowerCase();
+    if (!href) continue;
+
+    let parsed;
+    try {
+      parsed = new URL(href);
+    } catch {
+      continue;
+    }
+
+    if (parsed.origin !== origin) continue;
+
+    const path = parsed.pathname.toLowerCase();
+    if (
+      /(press|news|media|investor)/.test(path) ||
+      /(новост|пресс|инвестор|press|news|media)/.test(text)
+    ) {
+      out.push(href);
+    }
+  }
+
+  return Array.from(new Set(out)).slice(0, 5);
+}
+
+function articleLinks(html, origin) {
+  const out = [];
+  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = re.exec(html))) {
+    const href = absoluteUrl(match[1], origin);
+    const text = clean(match[2]);
+
+    if (!href || text.length < 18 || text.length > 280) continue;
+
+    let parsed;
+    try {
+      parsed = new URL(href);
+    } catch {
+      continue;
+    }
+
+    if (parsed.origin !== origin) continue;
+
+    const path = parsed.pathname.toLowerCase();
+    if (!/(press|news|media|investor|company|release|publication)/.test(path)) continue;
+
+    const around = html.slice(
+      Math.max(0, match.index - 420),
+      Math.min(html.length, re.lastIndex + 420)
+    );
+
+    out.push({
+      title: text,
+      url: href,
+      date: parseRussianDate(around)
+    });
+  }
+
+  const seen = new Set();
+  return out.filter(function(item) {
+    const key = item.url.split("#")[0];
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 80);
 }
 
 function dedupe(items) {
@@ -324,7 +454,7 @@ function dedupe(items) {
   const out = [];
 
   items.forEach(function(item) {
-    const key = normalized(item.title);
+    const key = normalize(item.title);
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push(item);
@@ -333,43 +463,135 @@ function dedupe(items) {
   return out;
 }
 
-const CATEGORY_WEIGHT = {
-  "Санкции / ограничения": 100,
-  "Налоги / регуляторика": 96,
-  "M&A / собственность": 94,
-  "CAPEX / инвестиции": 92,
-  "Долг / финансирование": 90,
-  "Кредитный профиль": 89,
-  "Финансовые результаты": 88,
-  "Контракты": 85,
-  "ВЭД": 84,
-  "Регулирование / господдержка": 83,
-  "Суды / споры": 80,
-  "Производство / продажи": 78,
-  "Логистика": 75,
-  "Менеджмент / управление": 72,
-  "Ликвидность": 70,
-  "Новости компании": 45
-};
+async function officialNews(profile, aliases) {
+  const site = await discoverOfficialSite(profile, aliases);
+  if (!site) return { articles: [], domain: null };
 
-function recencyScore(value) {
-  const date = parseDate(value);
-  if (!date) return 0;
-  const age = Math.max(0, Date.now() - date.getTime());
-  const days = age / (24 * 60 * 60 * 1000);
-  return Math.max(0, 20 - Math.floor(days / 5));
+  const pages = [{ url: site.origin, html: site.html }];
+  const paths = [
+    "/press/",
+    "/press/company/",
+    "/news/",
+    "/media/news/",
+    "/press-center/",
+    "/investors/news/"
+  ].map(function(path) {
+    return site.origin + path;
+  });
+
+  const candidates = Array.from(new Set(
+    listingLinks(site.html, site.origin).concat(paths)
+  )).slice(0, 8);
+
+  const fetched = await Promise.allSettled(candidates.map(async function(url) {
+    const response = await safeFetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" },
+      redirect: "follow"
+    }, 3000);
+
+    if (!response.ok) throw new Error("listing unavailable");
+
+    return {
+      url: response.url || url,
+      html: await response.text()
+    };
+  }));
+
+  fetched.forEach(function(result) {
+    if (result.status === "fulfilled") pages.push(result.value);
+  });
+
+  let articles = [];
+
+  pages.forEach(function(page) {
+    articleLinks(page.html, site.origin).forEach(function(item, index) {
+      articles.push({
+        id: "official-" + index + "-" + articles.length,
+        title: item.title,
+        description: "",
+        date: item.date || new Date().toISOString(),
+        sourceName: "Официальный сайт",
+        domain: new URL(site.origin).hostname.replace(/^www\./, ""),
+        url: item.url,
+        official: true
+      });
+    });
+  });
+
+  articles = dedupe(articles).filter(function(item) {
+    return withinLookback(item.date);
+  });
+
+  return {
+    articles: articles.slice(0, 50),
+    domain: new URL(site.origin).hostname.replace(/^www\./, "")
+  };
+}
+
+function relevanceScore(article, profile, aliases) {
+  if (article.official) return 100;
+
+  const title = normalize(article.title);
+  const description = normalize(article.description);
+  const text = title + " " + description;
+
+  let score = 0;
+
+  aliases.forEach(function(alias) {
+    const value = normalize(alias);
+    if (!value) return;
+
+    if (title.includes(value)) score += 6;
+    else if (text.includes(value)) score += 3;
+  });
+
+  if (profile.inn && text.includes(profile.inn)) score += 10;
+
+  return score;
+}
+
+function tokenSet(value) {
+  const stop = new Set([
+    "компания","компании","россия","россии","сообщил","сообщила",
+    "заявил","заявила","новый","новая","новые","будет","может",
+    "после","для","что","как","при","это"
+  ]);
+
+  return new Set(
+    normalize(value)
+      .split(" ")
+      .filter(function(token) {
+        return token.length >= 4 && !stop.has(token);
+      })
+  );
+}
+
+function similarity(a, b) {
+  const aa = tokenSet(a);
+  const bb = tokenSet(b);
+
+  if (!aa.size || !bb.size) return 0;
+
+  let common = 0;
+  aa.forEach(function(token) {
+    if (bb.has(token)) common += 1;
+  });
+
+  return common / Math.max(aa.size, bb.size);
 }
 
 function clusterArticles(articles) {
   const clusters = [];
 
   articles.forEach(function(article) {
-    const analysis = classifyHeadline(article.title + " " + (article.description || ""));
+    const analysis = classifyHeadline(
+      article.title + " " + (article.description || "")
+    );
     const category = analysis ? analysis.category : "Новости компании";
 
     const existing = clusters.find(function(cluster) {
       return cluster.category === category &&
-        similarity(cluster.articles[0].title, article.title) >= 0.34;
+        similarity(cluster.articles[0].title, article.title) >= 0.30;
     });
 
     if (existing) {
@@ -386,53 +608,134 @@ function clusterArticles(articles) {
   return clusters;
 }
 
-function buildStory(cluster, index) {
-  const articles = cluster.articles.slice().sort(function(a,b) {
-    return (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0);
-  });
-  const representative = articles[0];
+function storyWeight(cluster) {
+  const weights = {
+    "Санкции / ограничения":100,
+    "Налоги / регуляторика":98,
+    "M&A / собственность":96,
+    "CAPEX / инвестиции":94,
+    "Долг / финансирование":92,
+    "Кредитный профиль":91,
+    "Финансовые результаты":90,
+    "Контракты":88,
+    "ВЭД":86,
+    "Регулирование / господдержка":85,
+    "Суды / споры":82,
+    "Производство / продажи":80,
+    "Логистика":78,
+    "Менеджмент / управление":76,
+    "Ликвидность":74,
+    "Новости компании":50
+  };
 
+  return weights[cluster.category] || 50;
+}
+
+function buildStory(cluster, index) {
+  const articles = cluster.articles.slice().sort(function(a, b) {
+    const aa = parseDate(a.date);
+    const bb = parseDate(b.date);
+    return (bb ? bb.getTime() : 0) - (aa ? aa.getTime() : 0);
+  });
+
+  const representative = articles[0];
   const sources = [];
   const sourceSet = new Set();
+
   articles.forEach(function(article) {
     const key = (article.domain || article.sourceName || "").toLowerCase();
     if (!key || sourceSet.has(key)) return;
+
     sourceSet.add(key);
     sources.push({
       name: article.sourceName,
       domain: article.domain,
-      url: article.url
+      url: article.url,
+      official: article.official
     });
   });
 
   const analysis = cluster.analysis;
-  const stage = detectFactStage(articles.map(function(a) {
-    return a.title + " " + (a.description || "");
-  }).join(" "));
-  const categoryWeight = CATEGORY_WEIGHT[cluster.category] || 45;
-  const sourceBonus = Math.min(15, Math.max(0, sources.length - 1) * 5);
-  const importance = Math.min(
-    100,
-    categoryWeight + sourceBonus + recencyScore(representative.date)
+  const stage = detectFactStage(
+    articles.map(function(article) {
+      return article.title + " " + (article.description || "");
+    }).join(" ")
   );
 
   return {
     id: "story-" + index,
     category: cluster.category,
     headline: representative.title,
-    summary: representative.title,
-    date: parseDate(representative.date)?.toISOString() || new Date().toISOString(),
+    summary: clean(representative.description) || representative.title,
+    date: (parseDate(representative.date) || new Date()).toISOString(),
     sourceCount: sources.length,
     sources: sources,
     factStage: stage.label,
     factStageKey: stage.key,
     impact: analysis
       ? analysis.impact
-      : "Свежий сюжет о компании. Рекомендуется открыть первоисточник и оценить, создает ли он повод для контакта.",
+      : "Свежий сюжет о компании. Откройте источник, чтобы оценить его коммерческую значимость.",
     products: analysis ? analysis.products : [],
-    importance: importance,
-    isSignal: Boolean(analysis)
+    isSignal: Boolean(analysis),
+    weight: storyWeight(cluster) + Math.min(15, sources.length * 4)
   };
+}
+
+function extractMetaDescription(html) {
+  const patterns = [
+    /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i,
+    /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) {
+      const value = clean(match[1]);
+      if (value.length >= 45) return value;
+    }
+  }
+
+  return "";
+}
+
+function shorten(value, maxLength) {
+  let text = clean(value);
+  if (text.length <= maxLength) return text;
+  text = text.slice(0, maxLength - 1).replace(/\s+\S*$/, "");
+  return text + "…";
+}
+
+async function enrichStory(story) {
+  const direct = story.sources.find(function(source) {
+    return source.url && !String(source.url).includes("news.google.com");
+  });
+
+  if (!direct) {
+    story.summary = shorten(story.summary, 360);
+    return story;
+  }
+
+  try {
+    const response = await safeFetch(direct.url, {
+      headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" },
+      redirect: "follow"
+    }, 3200);
+
+    if (!response.ok) {
+      story.summary = shorten(story.summary, 360);
+      return story;
+    }
+
+    const html = await response.text();
+    const description = extractMetaDescription(html);
+    story.summary = shorten(description || story.summary, 360);
+  } catch {
+    story.summary = shorten(story.summary, 360);
+  }
+
+  return story;
 }
 
 export async function POST(request) {
@@ -454,61 +757,66 @@ export async function POST(request) {
       return /^[a-z0-9 .&-]+$/i.test(alias);
     });
 
-    const jobs = [
+    const searchJobs = [
       googleNews('"' + primary + '"', "ru", "ru-exact"),
       googleNews(primary, "ru", "ru-broad"),
       gdelt(aliases)
     ];
 
     if (latin) {
-      jobs.push(googleNews(latin, "en", "en-broad"));
+      searchJobs.push(googleNews(latin, "en", "en-broad"));
     }
 
-    const settled = await Promise.allSettled(jobs);
-    let rawArticles = [];
+    const results = await Promise.all([
+      officialNews(profile, aliases).catch(function() {
+        return { articles: [], domain: null };
+      }),
+      Promise.allSettled(searchJobs)
+    ]);
 
-    settled.forEach(function(result) {
+    const official = results[0];
+    const searchResults = results[1];
+
+    let raw = official.articles.slice();
+
+    searchResults.forEach(function(result) {
       if (result.status === "fulfilled") {
-        rawArticles = rawArticles.concat(result.value);
+        raw = raw.concat(result.value);
       }
     });
 
-    const collected = dedupe(rawArticles);
+    const collected = dedupe(raw);
+
     const relevant = collected.filter(function(article) {
-      return relevanceScore(article, profile, aliases) >= 3;
+      return article.official || relevanceScore(article, profile, aliases) >= 2;
     });
 
-    const stories = clusterArticles(relevant)
+    let stories = clusterArticles(relevant)
       .map(buildStory)
-      .sort(function(a,b) {
-        if (b.importance !== a.importance) return b.importance - a.importance;
+      .sort(function(a, b) {
+        if (b.weight !== a.weight) return b.weight - a.weight;
         return new Date(b.date) - new Date(a.date);
-      });
+      })
+      .slice(0, 10);
 
-    const important = stories.filter(function(story) {
-      return story.isSignal || story.importance >= 65;
-    }).slice(0, 10);
-
-    const fallback = stories.slice(0, 10);
-    const finalStories = important.length >= 4 ? important : fallback;
+    stories = await Promise.all(stories.map(enrichStory));
 
     return NextResponse.json({
       company: profile,
-      stories: finalStories,
+      stories: stories,
       stats: {
         articlesCollected: collected.length,
         relevantArticles: relevant.length,
         storiesFound: stories.length,
-        importantStories: finalStories.length,
-        sourcesFound: new Set(relevant.map(function(a) {
-          return a.domain || a.sourceName;
+        sourcesFound: new Set(relevant.map(function(article) {
+          return article.domain || article.sourceName;
         }).filter(Boolean)).size
       },
-      aliases: aliases,
+      officialDomain: official.domain,
       lookbackDays: LOOKBACK_DAYS,
       fetchedAt: new Date().toISOString(),
       methodology:
-        "Собираем публикации Google News на русском и английском плюс GDELT, объединяем дубли в сюжеты и показываем до 10 самых значимых по типу события, свежести и числу независимых источников."
+        "Собираем публикации из нескольких новостных каналов и, когда удается определить официальный сайт, из пресс-центра самой компании. Склеиваем дубли и показываем до 10 главных сюжетов с короткой выжимкой."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
