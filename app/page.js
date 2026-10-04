@@ -14,47 +14,28 @@ function formatDate(value) {
   }
 }
 
-function statusClass(status) {
-  return status === "Подтверждено" ? "verifiedEvent" : "reviewEvent";
-}
-
-function stageClass(key) {
-  if (key === "enacted") return "stageEnacted";
-  if (key === "proposed") return "stageProposed";
-  if (key === "denied") return "stageDenied";
-  if (key === "conflict") return "stageConflict";
-  return "stageReported";
-}
-
-function priorityClass(priority) {
-  if (priority === "Высокий") return "priorityHigh";
-  if (priority === "Средний") return "priorityMedium";
-  return "priorityLow";
-}
-
 function makeLetter(company, events) {
-  const useful = events.filter(function(event) {
-    return event.factStageKey !== "denied" && event.factStageKey !== "conflict";
+  const selected = events.slice(0, 5);
+  const topics = selected.map(function(event) {
+    return event.isSignal ? event.title.toLowerCase() : event.headline;
   });
-  const topics = useful.slice(0, 4).map(function(event) {
-    return event.title.toLowerCase();
-  });
-  const products = Array.from(new Set(useful.flatMap(function(event) {
-    return event.products || [];
-  }))).slice(0, 5);
+  const products = Array.from(new Set(
+    selected.flatMap(function(event) {
+      return event.products || [];
+    })
+  )).slice(0, 5);
 
   return [
     "Добрый день.",
     "",
-    topics.length
-      ? "Обратил внимание на несколько актуальных событий вокруг " + company.name + ": " + topics.join(", ") + "."
-      : "Обратил внимание на несколько актуальных публичных событий вокруг " + company.name + ".",
+    "Обратил внимание на несколько актуальных событий вокруг " + company.name + ":",
+    topics.map(function(topic) { return "— " + topic; }).join("\n"),
     "",
     products.length
       ? "Хотел уточнить, могут ли в этой связи быть актуальны решения в части " + products.join(", ").toLowerCase() + "."
       : "Хотел уточнить, есть ли сейчас задачи, где мы могли бы быть полезны.",
     "",
-    "Если вопрос актуален, предлагаю коротко обсудить возможные варианты."
+    "Если актуально, предлагаю коротко обсудить."
   ].join("\n");
 }
 
@@ -64,9 +45,19 @@ export default function Home() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState([]);
-  const [view, setView] = useState("all");
+  const [filter, setFilter] = useState("all");
   const [letterOpen, setLetterOpen] = useState(false);
   const [letter, setLetter] = useState("");
+
+  const visibleEvents = useMemo(function() {
+    if (!data) return [];
+    if (filter === "signals") {
+      return data.events.filter(function(event) {
+        return event.isSignal;
+      });
+    }
+    return data.events;
+  }, [data, filter]);
 
   const selectedEvents = useMemo(function() {
     if (!data) return [];
@@ -75,34 +66,16 @@ export default function Home() {
     });
   }, [data, selected]);
 
-  const visibleEvents = useMemo(function() {
-    if (!data) return [];
-    if (view === "high") {
-      return data.events.filter(function(event) {
-        return event.priority === "Высокий";
-      });
-    }
-    if (view === "verified") {
-      return data.events.filter(function(event) {
-        return event.status === "Подтверждено";
-      });
-    }
-    return data.events;
-  }, [data, view]);
-
   function normalizeInn(value) {
     return String(value || "").replace(/\D/g, "").slice(0, 10);
   }
 
   async function analyze(event) {
     if (event) event.preventDefault();
-    const value = normalizeInn(inn);
 
+    const value = normalizeInn(inn);
     if (value.length !== 10) {
-      setError({
-        message: "Введите 10-значный ИНН юридического лица.",
-        code: "INVALID_INN"
-      });
+      setError("Введите 10-значный ИНН юридического лица.");
       return;
     }
 
@@ -110,7 +83,7 @@ export default function Home() {
     setError(null);
     setData(null);
     setSelected([]);
-    setView("all");
+    setFilter("all");
 
     try {
       const response = await fetch("/api/analyze", {
@@ -118,20 +91,16 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inn: value })
       });
+
       const payload = await response.json();
 
       if (!response.ok) {
-        const problem = new Error(payload.error || "Ошибка анализа");
-        problem.code = payload.code;
-        throw problem;
+        throw new Error(payload.error || "Не удалось выполнить поиск.");
       }
 
       setData(payload);
     } catch (e) {
-      setError({
-        message: e.message,
-        code: e.code || "ERROR"
-      });
+      setError(e.message || "Не удалось выполнить поиск.");
     } finally {
       setLoading(false);
     }
@@ -140,14 +109,17 @@ export default function Home() {
   function toggle(id) {
     setSelected(function(prev) {
       return prev.includes(id)
-        ? prev.filter(function(x) { return x !== id; })
+        ? prev.filter(function(item) { return item !== id; })
         : prev.concat(id);
     });
   }
 
   function openLetter() {
-    const chosen = selectedEvents.length ? selectedEvents : data.events.slice(0, 3);
-    setLetter(makeLetter(data.company, chosen));
+    const chosen = selectedEvents.length
+      ? selectedEvents
+      : data.events.filter(function(event) { return event.isSignal; }).slice(0, 3);
+
+    setLetter(makeLetter(data.company, chosen.length ? chosen : data.events.slice(0, 3)));
     setLetterOpen(true);
   }
 
@@ -156,19 +128,18 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">Публичные сигналы → повод для контакта</div>
+          <div className="headerNote">Свежие новости компании по ИНН</div>
         </div>
-        <div className="headerState">ИНН → юрлицо → проверенные события</div>
       </header>
 
       <section className={data ? "searchSection compactSearch" : "searchSection"}>
         {!data && (
           <>
-            <div className="overline">КОРПОРАТИВНАЯ РАЗВЕДКА</div>
-            <h1>Радар компании по ИНН</h1>
-            <p>Не ищем по названию. Сначала точно определяем юрлицо, затем проверяем новости, связанных лиц и отраслевые события.</p>
+            <h1>Введите ИНН компании</h1>
+            <p>Определяем точное юрлицо и ищем свежие публикации о нём в Google News за последние 90 дней.</p>
           </>
         )}
+
         <form className="innForm" onSubmit={analyze}>
           <div className="innField">
             <span>ИНН</span>
@@ -177,10 +148,12 @@ export default function Home() {
               value={inn}
               onChange={function(e) { setInn(normalizeInn(e.target.value)); }}
               placeholder="10 цифр"
-              aria-label="ИНН юридического лица"
+              aria-label="ИНН"
             />
           </div>
-          <button disabled={loading}>{loading ? "Анализируем…" : data ? "Проверить другую компанию" : "Проанализировать"}</button>
+          <button disabled={loading}>
+            {loading ? "Ищем новости…" : data ? "Найти другую компанию" : "Найти новости"}
+          </button>
         </form>
       </section>
 
@@ -188,110 +161,77 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Собираем профиль и проверяем события</strong>
-            <span>Идентификация юрлица → доверенные источники → дедупликация → проверка стадии события.</span>
+            <strong>Ищем свежие публикации</strong>
+            <span>Сначала определяем компанию по ИНН, затем ищем новости по её точному названию.</span>
           </div>
         </section>
       )}
 
       {error && (
         <section className="errorPanel">
-          <strong>{error.code === "CONFIG_REQUIRED" ? "Не подключена идентификация по ИНН" : "Не получилось выполнить анализ"}</strong>
-          <p>{error.message}</p>
-          {error.code === "CONFIG_REQUIRED" && (
-            <p className="setupHint">Проверьте переменную DADATA_TOKEN в Production Environment Variables Vercel и выполните Redeploy.</p>
-          )}
+          <strong>Не получилось выполнить поиск</strong>
+          <p>{error}</p>
         </section>
       )}
 
       {data && (
         <>
           <section className="companyCard">
-            <div className="companyIdentity">
+            <div>
               <div className="verifiedBadge">Юрлицо подтверждено</div>
               <h2>{data.company.name}</h2>
               <div className="companyMeta">
                 <span>ИНН {data.company.inn}</span>
                 {data.company.ogrn && <span>ОГРН {data.company.ogrn}</span>}
                 {data.company.okved && <span>ОКВЭД {data.company.okved}</span>}
-                {data.company.status && <span>{data.company.status}</span>}
               </div>
               {data.company.management && data.company.management.name && (
                 <div className="director">
                   Руководитель: <b>{data.company.management.name}</b>
-                  {data.company.management.post ? " · " + data.company.management.post : ""}
                 </div>
               )}
             </div>
-            <div className="companyAside">
-              <span>Период</span>
-              <b>90 дней</b>
-            </div>
+            <div className="period">Последние {data.lookbackDays} дней</div>
           </section>
 
-          <section className="radarSummary">
-            <div className="summaryMain">
-              <span>Требуют внимания</span>
-              <strong>{data.stats.highPriorityEvents || 0}</strong>
-              <small>событий высокого приоритета</small>
-            </div>
-            <div className="summaryStat">
-              <strong>{data.stats.verifiedEvents || 0}</strong>
-              <span>подтверждено</span>
-            </div>
-            <div className="summaryStat">
-              <strong>{data.stats.sourcesWithMatches}</strong>
-              <span>источников с совпадениями</span>
-            </div>
-            <div className="summaryStat">
-              <strong>{data.stats.publicationsReviewed}</strong>
-              <span>публикаций просмотрено</span>
-            </div>
+          <section className="simpleStats">
+            <div><strong>{data.stats.publicationsFound}</strong><span>публикаций найдено</span></div>
+            <div><strong>{data.stats.sourcesFound}</strong><span>источников</span></div>
+            <div><strong>{data.stats.signalsFound}</strong><span>банковских сигналов</span></div>
           </section>
 
-          {data.relations && data.relations.length > 0 && (
-            <details className="relations">
-              <summary>
-                <span>Профиль связей</span>
-                <small>{data.relations.length} подтвержденных записей</small>
-              </summary>
-              <div className="relationList">
-                {data.relations.map(function(item, index) {
-                  return (
-                    <div key={index}>
-                      <span>{item.type}</span>
-                      <b>{item.name}</b>
-                      {item.detail && <small>{item.detail}</small>}
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
-          )}
-
-          <section className="eventsHeader">
+          <section className="newsHeader">
             <div>
-              <h2>События</h2>
+              <h2>Новости</h2>
               <p>{data.methodology}</p>
             </div>
             <div className="viewTabs">
-              <button className={view === "all" ? "active" : ""} onClick={function() { setView("all"); }}>Все {data.events.length}</button>
-              <button className={view === "high" ? "active" : ""} onClick={function() { setView("high"); }}>Высокий приоритет</button>
-              <button className={view === "verified" ? "active" : ""} onClick={function() { setView("verified"); }}>Подтверждено</button>
+              <button
+                className={filter === "all" ? "active" : ""}
+                onClick={function() { setFilter("all"); }}
+              >
+                Все {data.events.length}
+              </button>
+              <button
+                className={filter === "signals" ? "active" : ""}
+                onClick={function() { setFilter("signals"); }}
+              >
+                Сигналы {data.stats.signalsFound}
+              </button>
             </div>
           </section>
 
           {visibleEvents.length === 0 ? (
             <section className="emptyPanel">
-              <strong>В этой выборке событий нет</strong>
-              <p>Сервис не подставляет демонстрационные или непроверенные новости ради заполнения экрана.</p>
+              <strong>Свежих публикаций не найдено</strong>
+              <p>Попробуйте другую компанию или повторите поиск позже.</p>
             </section>
           ) : (
-            <section className="eventList">
+            <section className="newsList">
               {visibleEvents.map(function(event) {
                 return (
-                  <article className="eventRow" key={event.id}>
-                    <label className="eventCheck" title="Добавить в письмо">
+                  <article className="newsItem" key={event.id}>
+                    <label className="newsCheck">
                       <input
                         type="checkbox"
                         checked={selected.includes(event.id)}
@@ -299,83 +239,54 @@ export default function Home() {
                       />
                     </label>
 
-                    <details className="eventDetails">
-                      <summary>
-                        <div className={"priorityMark " + priorityClass(event.priority)} />
-                        <div className="eventMain">
-                          <div className="eventTitleLine">
-                            <h3>{event.title}</h3>
-                            {event.scope && <span className="scopeBadge">{event.scope}</span>}
-                          </div>
-                          <div className="eventMeta">
-                            <span className={"factStage " + stageClass(event.factStageKey)}>{event.factStage}</span>
-                            <span className={statusClass(event.status)}>{event.status}</span>
-                            <span>{event.sourceCount} источн.</span>
-                            <span>{formatDate(event.latestDate)}</span>
-                          </div>
+                    <div className="newsContent">
+                      <div className="newsTop">
+                        <div className="newsBadges">
+                          <span className="categoryBadge">{event.category}</span>
+                          {event.factStageKey !== "reported" && (
+                            <span className={"stageBadge " + event.factStageKey}>{event.factStage}</span>
+                          )}
                         </div>
-                        <div className="eventScore">
-                          <span>{event.priority}</span>
-                          <b>{event.confidence}%</b>
-                        </div>
-                        <div className="chevron">⌄</div>
-                      </summary>
-
-                      <div className="eventBody">
-                        <div className="evidence">
-                          <small>Что нашли</small>
-                          <p>{event.evidenceHeadline}</p>
-                        </div>
-
-                        <div className="relationWhy">
-                          <small>Почему относится к компании</small>
-                          <p>{event.relation}</p>
-                        </div>
-
-                        <div className="impact">
-                          <small>Почему это важно</small>
-                          <p>{event.impact}</p>
-                        </div>
-
-                        <div className="products">
-                          <small>Что можно обсудить</small>
-                          <div>
-                            {event.products.map(function(product) {
-                              return <span key={product}>{product}</span>;
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="sources">
-                          <small>Источники</small>
-                          {event.sources.map(function(source, index) {
-                            return source.url
-                              ? <a href={source.url} target="_blank" rel="noreferrer" key={index}>{source.name || source.domain} <span>↗</span></a>
-                              : <span key={index}>{source.name || source.domain}</span>;
-                          })}
-                        </div>
+                        <time>{formatDate(event.latestDate)}</time>
                       </div>
-                    </details>
+
+                      <h3>{event.headline}</h3>
+
+                      <div className="newsSourceLine">
+                        <span>{event.sourceName}</span>
+                        {event.url && (
+                          <a href={event.url} target="_blank" rel="noreferrer">Открыть источник ↗</a>
+                        )}
+                      </div>
+
+                      {event.isSignal && (
+                        <div className="signalBox">
+                          <div>
+                            <small>Сигнал</small>
+                            <b>{event.title}</b>
+                          </div>
+                          <p>{event.impact}</p>
+                          {event.products.length > 0 && (
+                            <div className="productChips">
+                              {event.products.map(function(product) {
+                                return <span key={product}>{product}</span>;
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </article>
                 );
               })}
             </section>
           )}
 
-          <details className="sourceContour">
-            <summary>Контур проверки: {data.stats.sourcesInContour} доверенных источников</summary>
-            <div>
-              {data.sources.map(function(source) {
-                return <span key={source.domain}>{source.name}</span>;
-              })}
-            </div>
-          </details>
-
           {data.events.length > 0 && (
             <div className="letterBar">
               <div>
-                <strong>{selected.length ? "Выбрано: " + selected.length : "Выберите события для письма"}</strong>
-                <span>Опровергнутые и спорные события автоматически не используются как утверждения.</span>
+                <strong>{selected.length ? "Выбрано новостей: " + selected.length : "Выберите новости для письма"}</strong>
+                <span>Письмо соберётся из отмеченных публикаций и найденных банковских сигналов.</span>
               </div>
               <button onClick={openLetter}>Составить письмо</button>
             </div>
@@ -384,23 +295,29 @@ export default function Home() {
       )}
 
       <footer>
-        Client Radar использует публично доступные источники. Продуктовые гипотезы требуют проверки менеджером и не являются утверждением о финансовом состоянии клиента.
+        Client Radar использует публичные публикации. Банковские выводы являются гипотезами менеджеру и требуют проверки контекста источника.
       </footer>
 
       {letterOpen && (
         <div className="modalBackdrop" onMouseDown={function() { setLetterOpen(false); }}>
           <div className="modal" onMouseDown={function(e) { e.stopPropagation(); }}>
             <div className="modalHeader">
-              <div>
-                <small>ЧЕРНОВИК</small>
-                <h2>Письмо клиенту</h2>
-              </div>
+              <h2>Черновик письма</h2>
               <button onClick={function() { setLetterOpen(false); }}>×</button>
             </div>
             <textarea value={letter} onChange={function(e) { setLetter(e.target.value); }} />
             <div className="modalActions">
               <button onClick={function() { navigator.clipboard.writeText(letter); }}>Копировать</button>
-              <a href={"mailto:?subject=" + encodeURIComponent("Актуальные направления для обсуждения") + "&body=" + encodeURIComponent(letter)}>Открыть в почте</a>
+              <a
+                href={
+                  "mailto:?subject=" +
+                  encodeURIComponent("Актуальные направления для обсуждения") +
+                  "&body=" +
+                  encodeURIComponent(letter)
+                }
+              >
+                Открыть в почте
+              </a>
             </div>
           </div>
         </div>
