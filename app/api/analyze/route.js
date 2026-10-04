@@ -26,6 +26,7 @@ function clean(value) {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&nbsp;|&#160;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -362,7 +363,7 @@ async function discoverOfficialSite(profile, aliases) {
     const response = await safeFetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" },
       redirect: "follow"
-    }, 2400);
+    }, 4200);
 
     if (!response.ok) throw new Error("not ok");
 
@@ -543,7 +544,7 @@ async function officialNews(profile, aliases) {
     const response = await safeFetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 ClientRadar/6.0" },
       redirect: "follow"
-    }, 3000);
+    }, 4200);
 
     if (!response.ok) throw new Error("listing unavailable");
 
@@ -805,6 +806,15 @@ function eventQueries(primary) {
   ];
 }
 
+
+function trustedMediaQueries(primary) {
+  const name = '"' + primary + '"';
+  return [
+    name + " (site:interfax.ru OR site:1prime.ru OR site:acra-ratings.ru OR site:moex.com)",
+    name + " (site:rbc.ru OR site:kommersant.ru OR site:vedomosti.ru OR site:tass.ru)"
+  ];
+}
+
 function likelyOfficialDomains(profile, aliases) {
   const slugs = candidateDomainSlugs(profile, aliases);
   const out = [];
@@ -843,6 +853,10 @@ export async function POST(request) {
 
     eventQueries(primary).forEach(function(query, index) {
       searchJobs.push(googleNews(query, "ru", "ru-event-" + index, "exact"));
+    });
+
+    trustedMediaQueries(primary).forEach(function(query, index) {
+      searchJobs.push(googleNews(query, "ru", "ru-trusted-" + index, "exact"));
     });
 
     likelyOfficialDomains(profile, aliases).slice(0, 2).forEach(function(domain, index) {
