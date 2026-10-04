@@ -226,7 +226,7 @@ function buildSectorQuery(profile) {
   const keywords = sectorKeywords(profile.okved, profile.name);
   if (!keywords.length) return null;
   const sector = "(" + keywords.map(function(k) { return '"' + k + '"'; }).join(" OR ") + ")";
-  const events = "(налог OR НДПИ OR пошлина OR санкции OR экспорт OR импорт OR субсидии OR тарифы OR регулирование)";
+  const events = "(налог OR НДПИ OR пошлина OR санкции OR экспорт OR импорт OR субсидии OR господдержка OR льготы OR тарифы OR квоты OR лицензирование OR регулирование)";
   return sector + " " + events;
 }
 
