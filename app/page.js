@@ -107,7 +107,7 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">ИНН → компания → события за 90 дней</div>
+          <div className="headerNote">ИНН → компания → до 20 полезных публикаций</div>
         </div>
       </header>
 
@@ -146,8 +146,8 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Собираем новости за последние 90 дней</strong>
-            <span>Определяем рабочие названия компании, ищем публикации и склеиваем дубли.</span>
+            <strong>Собираем публикации за последние 12 месяцев</strong>
+            <span>Определяем рабочие названия компании, ищем материалы и убираем только реальные дубли.</span>
           </div>
         </section>
       )}
@@ -227,19 +227,19 @@ export default function Home() {
           <section className="digestLine">
             Собрано <b>{data.stats.collected}</b> публикаций ·
             после проверки <b>{data.stats.relevant}</b> ·
-            уникальных событий <b>{data.stats.events}</b>
+            в итоговой ленте <b>{data.stats.events}</b> публикаций
           </section>
 
           <section className="newsHeader">
             <div>
-              <h2>Хронология</h2>
+              <h2>Хронология публикаций</h2>
               <p>{data.methodology}</p>
             </div>
           </section>
 
           {data.events.length === 0 ? (
             <section className="emptyPanel">
-              <strong>За последние 90 дней событий не найдено</strong>
+              <strong>За последние 12 месяцев публикаций не найдено</strong>
               <p>Если это выглядит неправдоподобно, значит нужно дорабатывать именно идентификацию рабочего названия компании.</p>
             </section>
           ) : (
@@ -262,14 +262,20 @@ export default function Home() {
                     </div>
 
                     <div className="timelineContent">
-                      <div className="eventCategory">{event.category}</div>
-                      <h3>{event.title}</h3>
+                      <div className="newsMeta">
+                        <div className="eventCategory">{event.category}</div>
+                        {event.sourceName && <div className="sourceName">{event.sourceName}</div>}
+                      </div>
+                      <h3>
+                        {event.url ? (
+                          <a href={event.url} target="_blank" rel="noreferrer">{event.title}</a>
+                        ) : event.title}
+                      </h3>
                       <p>{event.details}</p>
-
-                      {event.mentions > 1 && (
-                        <div className="mentions">
-                          Найдено в {event.mentions} публикациях
-                        </div>
+                      {event.url && (
+                        <a className="readSource" href={event.url} target="_blank" rel="noreferrer">
+                          Открыть источник ↗
+                        </a>
                       )}
                     </div>
                   </article>
