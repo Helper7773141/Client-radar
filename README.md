@@ -28,11 +28,11 @@ Demo-новости удалены. Если не настроен DADATA_TOKEN,
 
 DADATA_TOKEN=
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-6-sol
+OPENAI_MODEL=gpt-6.1-sol
 
 ## Vercel
 
-Добавьте DADATA_TOKEN и OPENAI_API_KEY в Project Settings → Environment Variables и выполните Redeploy. OPENAI_MODEL опционален; по умолчанию используется gpt-6-sol. Ключ OpenAI используется только на серверной стороне и не попадает в браузер.
+Добавьте DADATA_TOKEN и OPENAI_API_KEY в Project Settings → Environment Variables и выполните Redeploy. OPENAI_MODEL опционален; по умолчанию используется gpt-6.1-sol. Ключ OpenAI используется только на серверной стороне и не попадает в браузер.
 
 ## Ограничения MVP
 
