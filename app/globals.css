@@ -270,11 +270,42 @@ button{cursor:pointer}
   font-size:10px;
   font-weight:750
 }
+.newsMeta{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px
+}
+.sourceName{
+  color:#8b929b;
+  font-size:10px;
+  text-align:right
+}
 .timelineContent h3{
   margin:10px 0 0;
   font-size:18px;
   line-height:1.38;
   letter-spacing:-.01em
+}
+.timelineContent h3 a{
+  color:inherit;
+  text-decoration:none
+}
+.timelineContent h3 a:hover{
+  text-decoration:underline;
+  text-underline-offset:3px
+}
+.readSource{
+  display:inline-flex;
+  margin-top:10px;
+  color:#315f9d;
+  font-size:11px;
+  font-weight:700;
+  text-decoration:none
+}
+.readSource:hover{
+  text-decoration:underline;
+  text-underline-offset:3px
 }
 .timelineContent p{
   margin:9px 0 0;
