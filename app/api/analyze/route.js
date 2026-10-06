@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { classifyHeadline } from "../../../lib/intelligence";
+import { classifyHeadline, sectorKeywords } from "../../../lib/intelligence";
+import { buildStrategicAnalysis } from "../../../lib/strategic";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const LOOKBACK_DAYS = 90;
 
@@ -927,6 +928,7 @@ export async function POST(request) {
     const identity = resolved[0];
     const network = resolved[1];
     const aliases = buildAliases(profile, identity);
+    const sectorTerms = sectorKeywords(profile.okved, profile.name).slice(0, 2);
 
     const mainAlias = aliases[0] || compactLegalName(profile.name);
     const jobs = [];
@@ -965,11 +967,32 @@ export async function POST(request) {
         jobs.push(bingNews(query, true));
       });
 
-    const settled = await Promise.allSettled(jobs);
+    const benchmarkJobs = [];
+    sectorTerms.forEach(function(term) {
+      benchmarkJobs.push(
+        googleNews(
+          '"' + term + '" (сделка OR приобрел OR купил OR продал OR инвестиции OR запуск OR расширение OR производство OR рынок)',
+          "ru",
+          false
+        )
+      );
+    });
+
+    const searchResults = await Promise.all([
+      Promise.allSettled(jobs),
+      Promise.allSettled(benchmarkJobs)
+    ]);
+    const settled = searchResults[0];
+    const benchmarkSettled = searchResults[1];
 
     let all = [];
     settled.forEach(function(result) {
       if (result.status === "fulfilled") all = all.concat(result.value);
+    });
+
+    let benchmarkAll = [];
+    benchmarkSettled.forEach(function(result) {
+      if (result.status === "fulfilled") benchmarkAll = benchmarkAll.concat(result.value);
     });
 
     const collected = dedupeArticles(all);
@@ -977,8 +1000,29 @@ export async function POST(request) {
       return relevant(article, aliases, profile);
     });
 
+    const benchmarkArticles = dedupeArticles(benchmarkAll)
+      .filter(function(article) {
+        return TRUSTED_DOMAINS.some(function(domain) {
+          return article.domain === domain || article.domain.endsWith("." + domain);
+        });
+      })
+      .slice(0, 20);
+
     const clustered = cluster(filtered);
-    let events = await Promise.all(clustered.map(enrichCluster));
+    const analysisJobs = await Promise.all([
+      Promise.all(clustered.map(enrichCluster)),
+      buildStrategicAnalysis({
+        profile: profile,
+        aliases: aliases,
+        network: network,
+        sectorTerms: sectorTerms,
+        companyArticles: filtered,
+        benchmarkArticles: benchmarkArticles
+      })
+    ]);
+
+    let events = analysisJobs[0];
+    const strategicAnalysis = analysisJobs[1];
 
     events = events
       .sort(function(a,b) {
@@ -993,14 +1037,16 @@ export async function POST(request) {
       subsidiaries: network.subsidiaries,
       relatedCompanies: network.relatedCompanies,
       events: events,
+      strategicAnalysis: strategicAnalysis,
       stats: {
         collected: collected.length,
         relevant: filtered.length,
+        benchmarks: benchmarkArticles.length,
         events: events.length
       },
       lookbackDays: LOOKBACK_DAYS,
       methodology:
-        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам из нескольких новостных каналов и доверенных доменов. Дубли склеиваем, события выводим по времени."
+        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам. Отдельно собираем отраслевые сигналы для бенчмаркинга. Хронология остается доказательной базой, а стратегический слой связывает факты в конкретные идеи для бизнеса и банка."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
