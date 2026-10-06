@@ -361,15 +361,12 @@ export default function Home() {
             </>
           )}
 
-          {data.strategicAnalysis &&
-            (data.strategicAnalysis.status === "disabled" || data.strategicAnalysis.status === "error") && (
-              <section className="analysisUnavailable">
-                <b>Глубокий стратегический анализ пока не включен.</b>
-                <span>
-                  {data.strategicAnalysis.reason || "Добавьте OPENAI_API_KEY в переменные окружения проекта."}
-                </span>
-              </section>
-            )}
+          {data.strategicAnalysis && data.strategicAnalysis.status === "error" && (
+            <section className="analysisUnavailable">
+              <b>Стратегический разбор временно недоступен.</b>
+              <span>{data.strategicAnalysis.reason || "Не удалось выполнить глубокий анализ."}</span>
+            </section>
+          )}
 
           <section className="newsHeader">
             <div>
