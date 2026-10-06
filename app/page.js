@@ -22,10 +22,10 @@ function makeLetter(company, events) {
   return [
     "Добрый день.",
     "",
-    "Посмотрел последние события вокруг " + company.name + " и обратил внимание на несколько вещей:",
+    "Обратил внимание на несколько актуальных событий вокруг " + company.name + ":",
     lines.join("\n"),
     "",
-    "Если что-то из этого сейчас актуально, буду рад коротко обсудить."
+    "Если актуально, предлагаю коротко обсудить."
   ].join("\n");
 }
 
@@ -53,6 +53,7 @@ export default function Home() {
     if (event) event.preventDefault();
 
     const value = normalizeInn(inn);
+
     if (value.length !== 10) {
       setError("Введите 10-значный ИНН юридического лица.");
       return;
@@ -71,13 +72,14 @@ export default function Home() {
       });
 
       const payload = await response.json();
+
       if (!response.ok) {
-        throw new Error(payload.error || "Не удалось собрать новости.");
+        throw new Error(payload.error || "Не удалось выполнить анализ.");
       }
 
       setData(payload);
     } catch (e) {
-      setError(e.message || "Не удалось собрать новости.");
+      setError(e.message || "Не удалось выполнить анализ.");
     } finally {
       setLoading(false);
     }
@@ -105,17 +107,17 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">ИНН → компания → до 20 полезных публикаций</div>
+          <div className="headerNote">ИНН → компания → события за 90 дней</div>
         </div>
       </header>
 
       <section className={data ? "searchSection compactSearch" : "searchSection"}>
         {!data && (
           <>
-            <h1>Что реально происходило у компании</h1>
+            <h1>Что произошло у компании</h1>
             <p>
-              Введите ИНН. Мы определим компанию и её рабочее название,
-              найдём содержательные публикации и покажем их обычной лентой — без искусственной склейки.
+              Введите ИНН. Мы определим компанию, найдём её рабочие названия,
+              соберём актуальные публикации и сведём их в короткую хронологию.
             </p>
           </>
         )}
@@ -135,7 +137,7 @@ export default function Home() {
           </div>
 
           <button disabled={loading}>
-            {loading ? "Ищем…" : data ? "Другая компания" : "Найти новости"}
+            {loading ? "Собираем…" : data ? "Другая компания" : "Показать события"}
           </button>
         </form>
       </section>
@@ -144,15 +146,15 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Ищем нормальные публикации о компании</strong>
-            <span>Проверяем название и бренд, собираем широкий пул и убираем дубли и случайные упоминания.</span>
+            <strong>Собираем новости за последние 90 дней</strong>
+            <span>Определяем рабочие названия компании, ищем публикации и склеиваем дубли.</span>
           </div>
         </section>
       )}
 
       {error && (
         <section className="errorPanel">
-          <strong>Не получилось собрать новости</strong>
+          <strong>Не получилось выполнить анализ</strong>
           <p>{error}</p>
         </section>
       )}
@@ -183,19 +185,38 @@ export default function Home() {
               )}
             </div>
 
-            <div className="period">Последние 12 месяцев</div>
+            <div className="period">Последние {data.lookbackDays} дней</div>
           </section>
 
-          {data.relations && data.relations.length > 0 && (
+          {((data.relations && data.relations.length > 0) ||
+            (data.subsidiaries && data.subsidiaries.length > 0) ||
+            (data.relatedCompanies && data.relatedCompanies.length > 0)) && (
             <details className="relationsSimple">
-              <summary>Подтвержденные лица</summary>
+              <summary>Подтвержденные связи</summary>
               <div>
-                {data.relations.map(function(item, index) {
+                {data.relations && data.relations.map(function(item, index) {
                   return (
-                    <span key={index}>
+                    <span key={"person-" + index}>
                       <b>{item.type}:</b> {item.name}
                       {item.post ? " · " + item.post : ""}
                       {item.share ? " · доля " + item.share : ""}
+                    </span>
+                  );
+                })}
+
+                {data.subsidiaries && data.subsidiaries.map(function(item, index) {
+                  return (
+                    <span key={"sub-" + index}>
+                      <b>Связанная компания:</b> {item.name}
+                      {item.share ? " · доля " + item.share : ""}
+                    </span>
+                  );
+                })}
+
+                {data.relatedCompanies && data.relatedCompanies.slice(0, 8).map(function(item, index) {
+                  return (
+                    <span key={"related-" + index}>
+                      <b>Через {item.via}:</b> {item.company.name}
                     </span>
                   );
                 })}
@@ -204,22 +225,22 @@ export default function Home() {
           )}
 
           <section className="digestLine">
-            Найдено <b>{data.stats.collected}</b> кандидатов ·
-            в итоговой ленте <b>{data.stats.events}</b>
-            {data.newsMode === "web-search" && <> · <b>web-поиск включен</b></>}
+            Собрано <b>{data.stats.collected}</b> публикаций ·
+            после проверки <b>{data.stats.relevant}</b> ·
+            уникальных событий <b>{data.stats.events}</b>
           </section>
 
           <section className="newsHeader">
             <div>
-              <h2>Новости компании</h2>
+              <h2>Хронология</h2>
               <p>{data.methodology}</p>
             </div>
           </section>
 
           {data.events.length === 0 ? (
             <section className="emptyPanel">
-              <strong>Содержательных публикаций не нашли</strong>
-              <p>Лучше показать пустую ленту, чем новости чужой компании или случайные упоминания.</p>
+              <strong>За последние 90 дней событий не найдено</strong>
+              <p>Если это выглядит неправдоподобно, значит нужно дорабатывать именно идентификацию рабочего названия компании.</p>
             </section>
           ) : (
             <section className="timeline">
@@ -241,29 +262,14 @@ export default function Home() {
                     </div>
 
                     <div className="timelineContent">
-                      <div className="newsTopline">
-                        <div className="eventCategory">{event.category}</div>
-                        {event.sourceName && (
-                          <div className="sourceName">{event.sourceName}</div>
-                        )}
-                      </div>
+                      <div className="eventCategory">{event.category}</div>
+                      <h3>{event.title}</h3>
+                      <p>{event.details}</p>
 
-                      <h3>
-                        {event.url ? (
-                          <a href={event.url} target="_blank" rel="noreferrer">
-                            {event.title}
-                          </a>
-                        ) : (
-                          event.title
-                        )}
-                      </h3>
-
-                      {event.details && <p>{event.details}</p>}
-
-                      {event.url && (
-                        <a className="readSource" href={event.url} target="_blank" rel="noreferrer">
-                          Открыть источник ↗
-                        </a>
+                      {event.mentions > 1 && (
+                        <div className="mentions">
+                          Найдено в {event.mentions} публикациях
+                        </div>
                       )}
                     </div>
                   </article>
@@ -277,10 +283,10 @@ export default function Home() {
               <div>
                 <strong>
                   {selected.length
-                    ? "Выбрано публикаций: " + selected.length
-                    : "Можно отметить нужные публикации"}
+                    ? "Выбрано событий: " + selected.length
+                    : "Выберите события для письма"}
                 </strong>
-                <span>Из отмеченных новостей соберём короткий черновик письма.</span>
+                <span>Письмо будет собрано только из отмеченных событий.</span>
               </div>
 
               <button onClick={openLetter}>Составить письмо</button>
@@ -290,7 +296,7 @@ export default function Home() {
       )}
 
       <footer>
-        Client Radar ищет публичные материалы о конкретной компании и показывает их в хронологическом порядке.
+        Client Radar собирает публичные публикации и сводит их в краткую хронологию.
       </footer>
 
       {letterOpen && (
