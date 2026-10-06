@@ -14,18 +14,27 @@ function formatDate(value) {
   }
 }
 
-function makeLetter(company, events) {
-  const lines = events.slice(0, 5).map(function(event) {
+function makeLetter(company, events, strategicAnalysis) {
+  const eventLines = events.slice(0, 5).map(function(event) {
     return "— " + event.title + (event.details ? ": " + event.details : "");
   });
+
+  const insightLines =
+    strategicAnalysis && strategicAnalysis.status === "ok"
+      ? (strategicAnalysis.insights || []).slice(0, 4).map(function(insight) {
+          return "— " + insight.title + ": " + (insight.move || insight.bankRole || insight.signal);
+        })
+      : [];
+
+  const lines = eventLines.length ? eventLines : insightLines;
 
   return [
     "Добрый день.",
     "",
-    "Обратил внимание на несколько актуальных событий вокруг " + company.name + ":",
+    "Посмотрел более детально на " + company.name + " и увидел несколько направлений, которые, на мой взгляд, могут быть интересны:",
     lines.join("\n"),
     "",
-    "Если актуально, предлагаю коротко обсудить."
+    "Если какие-то из этих задач сейчас актуальны, буду рад коротко обсудить."
   ].join("\n");
 }
 
@@ -94,11 +103,9 @@ export default function Home() {
   }
 
   function openLetter() {
-    const chosen = selectedEvents.length
-      ? selectedEvents
-      : data.events.slice(0, 3);
+    const chosen = selectedEvents.length ? selectedEvents : [];
 
-    setLetter(makeLetter(data.company, chosen));
+    setLetter(makeLetter(data.company, chosen, data.strategicAnalysis));
     setLetterOpen(true);
   }
 
@@ -146,8 +153,8 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Собираем новости за последние 90 дней</strong>
-            <span>Определяем рабочие названия компании, ищем публикации и склеиваем дубли.</span>
+            <strong>Собираем факты и строим стратегический разбор</strong>
+            <span>Ищем публикации о компании, отраслевые сигналы и связываем их в конкретные идеи.</span>
           </div>
         </section>
       )}
@@ -229,6 +236,140 @@ export default function Home() {
             после проверки <b>{data.stats.relevant}</b> ·
             уникальных событий <b>{data.stats.events}</b>
           </section>
+
+
+          {data.strategicAnalysis && data.strategicAnalysis.status === "ok" && (
+            <>
+              <section className="analysisHeader">
+                <div>
+                  <div className="analysisKicker">СТРАТЕГИЧЕСКИЙ РАЗБОР</div>
+                  <h2>Что это значит для бизнеса</h2>
+                  <p>
+                    Не пересказ новостей: факты связаны в гипотезы роста, сделок и конкретные точки входа банка.
+                  </p>
+                </div>
+                <div className="analysisModel">
+                  {data.strategicAnalysis.insights.length} приоритетных идей
+                </div>
+              </section>
+
+              <section className="analysisSummary">
+                <div>
+                  <span>Диагноз</span>
+                  <p>{data.strategicAnalysis.executiveSummary}</p>
+                </div>
+                {data.strategicAnalysis.strategicRead && (
+                  <div>
+                    <span>Главный вывод</span>
+                    <p>{data.strategicAnalysis.strategicRead}</p>
+                  </div>
+                )}
+              </section>
+
+              <section className="insightsGrid">
+                {data.strategicAnalysis.insights.map(function(insight, index) {
+                  return (
+                    <article className="insightCard" key={insight.id || index}>
+                      <div className="insightTop">
+                        <div className="insightTags">
+                          <span className="insightType">{insight.type}</span>
+                          <span className={"basisTag " + (insight.basis === "Факт" ? "fact" : "hypothesis")}>
+                            {insight.basis}
+                          </span>
+                        </div>
+                        <span className={"priority priority" + insight.priority}>
+                          {insight.priority}
+                        </span>
+                      </div>
+
+                      <h3>{index + 1}. {insight.title}</h3>
+
+                      {insight.signal && (
+                        <div className="insightSection">
+                          <b>Сигнал</b>
+                          <p>{insight.signal}</p>
+                        </div>
+                      )}
+
+                      {insight.whyItMatters && (
+                        <div className="insightSection">
+                          <b>Почему это важно</b>
+                          <p>{insight.whyItMatters}</p>
+                        </div>
+                      )}
+
+                      {insight.move && (
+                        <div className="insightSection moveSection">
+                          <b>Что можно делать</b>
+                          <p>{insight.move}</p>
+                        </div>
+                      )}
+
+                      {insight.bankRole && (
+                        <div className="insightSection bankSection">
+                          <b>Где встраивается банк</b>
+                          <p>{insight.bankRole}</p>
+                        </div>
+                      )}
+
+                      {insight.bankRevenue && insight.bankRevenue.length > 0 && (
+                        <div className="revenueRow">
+                          {insight.bankRevenue.map(function(item, revenueIndex) {
+                            return <span key={revenueIndex}>{item}</span>;
+                          })}
+                        </div>
+                      )}
+
+                      {insight.evidence && insight.evidence.length > 0 && (
+                        <div className="evidenceRow">
+                          <b>Основание:</b>
+                          {insight.evidence.map(function(source) {
+                            return source.url ? (
+                              <a
+                                key={source.id}
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={source.title}
+                              >
+                                {source.id} · {source.sourceName}
+                              </a>
+                            ) : (
+                              <span key={source.id}>{source.id} · {source.sourceName}</span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </section>
+
+              {data.strategicAnalysis.questions && data.strategicAnalysis.questions.length > 0 && (
+                <section className="questionsCard">
+                  <div>
+                    <span>ВОПРОСЫ НА ВСТРЕЧУ</span>
+                    <h3>Что проверить у клиента</h3>
+                  </div>
+                  <ol>
+                    {data.strategicAnalysis.questions.map(function(question, index) {
+                      return <li key={index}>{question}</li>;
+                    })}
+                  </ol>
+                </section>
+              )}
+            </>
+          )}
+
+          {data.strategicAnalysis &&
+            (data.strategicAnalysis.status === "disabled" || data.strategicAnalysis.status === "error") && (
+              <section className="analysisUnavailable">
+                <b>Глубокий стратегический анализ пока не включен.</b>
+                <span>
+                  {data.strategicAnalysis.reason || "Добавьте OPENAI_API_KEY в переменные окружения проекта."}
+                </span>
+              </section>
+            )}
 
           <section className="newsHeader">
             <div>
