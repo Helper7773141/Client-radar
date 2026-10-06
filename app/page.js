@@ -14,27 +14,18 @@ function formatDate(value) {
   }
 }
 
-function makeLetter(company, events, strategicAnalysis) {
-  const eventLines = events.slice(0, 5).map(function(event) {
+function makeLetter(company, events) {
+  const lines = events.slice(0, 5).map(function(event) {
     return "— " + event.title + (event.details ? ": " + event.details : "");
   });
-
-  const insightLines =
-    strategicAnalysis && strategicAnalysis.status === "ok"
-      ? (strategicAnalysis.insights || []).slice(0, 4).map(function(insight) {
-          return "— " + insight.title + ": " + (insight.move || insight.bankRole || insight.signal);
-        })
-      : [];
-
-  const lines = eventLines.length ? eventLines : insightLines;
 
   return [
     "Добрый день.",
     "",
-    "Посмотрел более детально на " + company.name + " и увидел несколько направлений, которые, на мой взгляд, могут быть интересны:",
+    "Посмотрел последние события вокруг " + company.name + " и обратил внимание на несколько вещей:",
     lines.join("\n"),
     "",
-    "Если какие-то из этих задач сейчас актуальны, буду рад коротко обсудить."
+    "Если что-то из этого сейчас актуально, буду рад коротко обсудить."
   ].join("\n");
 }
 
@@ -62,7 +53,6 @@ export default function Home() {
     if (event) event.preventDefault();
 
     const value = normalizeInn(inn);
-
     if (value.length !== 10) {
       setError("Введите 10-значный ИНН юридического лица.");
       return;
@@ -81,14 +71,13 @@ export default function Home() {
       });
 
       const payload = await response.json();
-
       if (!response.ok) {
-        throw new Error(payload.error || "Не удалось выполнить анализ.");
+        throw new Error(payload.error || "Не удалось собрать новости.");
       }
 
       setData(payload);
     } catch (e) {
-      setError(e.message || "Не удалось выполнить анализ.");
+      setError(e.message || "Не удалось собрать новости.");
     } finally {
       setLoading(false);
     }
@@ -103,9 +92,11 @@ export default function Home() {
   }
 
   function openLetter() {
-    const chosen = selectedEvents.length ? selectedEvents : [];
+    const chosen = selectedEvents.length
+      ? selectedEvents
+      : data.events.slice(0, 3);
 
-    setLetter(makeLetter(data.company, chosen, data.strategicAnalysis));
+    setLetter(makeLetter(data.company, chosen));
     setLetterOpen(true);
   }
 
@@ -114,17 +105,17 @@ export default function Home() {
       <header className="header">
         <div>
           <div className="logo">CLIENT RADAR</div>
-          <div className="headerNote">ИНН → компания → события за 90 дней</div>
+          <div className="headerNote">ИНН → компания → до 20 полезных публикаций</div>
         </div>
       </header>
 
       <section className={data ? "searchSection compactSearch" : "searchSection"}>
         {!data && (
           <>
-            <h1>Что произошло у компании</h1>
+            <h1>Что реально происходило у компании</h1>
             <p>
-              Введите ИНН. Мы определим компанию, найдём её рабочие названия,
-              соберём актуальные публикации и сведём их в короткую хронологию.
+              Введите ИНН. Мы определим компанию и её рабочее название,
+              найдём содержательные публикации и покажем их обычной лентой — без искусственной склейки.
             </p>
           </>
         )}
@@ -144,7 +135,7 @@ export default function Home() {
           </div>
 
           <button disabled={loading}>
-            {loading ? "Собираем…" : data ? "Другая компания" : "Показать события"}
+            {loading ? "Ищем…" : data ? "Другая компания" : "Найти новости"}
           </button>
         </form>
       </section>
@@ -153,15 +144,15 @@ export default function Home() {
         <section className="loadingPanel">
           <div className="spinner" />
           <div>
-            <strong>Собираем факты и строим стратегический разбор</strong>
-            <span>Ищем публикации о компании, отраслевые сигналы и связываем их в конкретные идеи.</span>
+            <strong>Ищем нормальные публикации о компании</strong>
+            <span>Проверяем название и бренд, собираем широкий пул и убираем дубли и случайные упоминания.</span>
           </div>
         </section>
       )}
 
       {error && (
         <section className="errorPanel">
-          <strong>Не получилось выполнить анализ</strong>
+          <strong>Не получилось собрать новости</strong>
           <p>{error}</p>
         </section>
       )}
@@ -192,38 +183,19 @@ export default function Home() {
               )}
             </div>
 
-            <div className="period">Последние {data.lookbackDays} дней</div>
+            <div className="period">Последние 12 месяцев</div>
           </section>
 
-          {((data.relations && data.relations.length > 0) ||
-            (data.subsidiaries && data.subsidiaries.length > 0) ||
-            (data.relatedCompanies && data.relatedCompanies.length > 0)) && (
+          {data.relations && data.relations.length > 0 && (
             <details className="relationsSimple">
-              <summary>Подтвержденные связи</summary>
+              <summary>Подтвержденные лица</summary>
               <div>
-                {data.relations && data.relations.map(function(item, index) {
+                {data.relations.map(function(item, index) {
                   return (
-                    <span key={"person-" + index}>
+                    <span key={index}>
                       <b>{item.type}:</b> {item.name}
                       {item.post ? " · " + item.post : ""}
                       {item.share ? " · доля " + item.share : ""}
-                    </span>
-                  );
-                })}
-
-                {data.subsidiaries && data.subsidiaries.map(function(item, index) {
-                  return (
-                    <span key={"sub-" + index}>
-                      <b>Связанная компания:</b> {item.name}
-                      {item.share ? " · доля " + item.share : ""}
-                    </span>
-                  );
-                })}
-
-                {data.relatedCompanies && data.relatedCompanies.slice(0, 8).map(function(item, index) {
-                  return (
-                    <span key={"related-" + index}>
-                      <b>Через {item.via}:</b> {item.company.name}
                     </span>
                   );
                 })}
@@ -232,153 +204,22 @@ export default function Home() {
           )}
 
           <section className="digestLine">
-            Собрано <b>{data.stats.collected}</b> публикаций ·
-            после проверки <b>{data.stats.relevant}</b> ·
-            уникальных событий <b>{data.stats.events}</b>
+            Найдено <b>{data.stats.collected}</b> кандидатов ·
+            в итоговой ленте <b>{data.stats.events}</b>
+            {data.newsMode === "web-search" && <> · <b>web-поиск включен</b></>}
           </section>
-
-
-          {data.strategicAnalysis && data.strategicAnalysis.status === "ok" && (
-            <>
-              <section className="analysisHeader">
-                <div>
-                  <div className="analysisKicker">СТРАТЕГИЧЕСКИЙ РАЗБОР</div>
-                  <h2>Что это значит для бизнеса</h2>
-                  <p>
-                    Не пересказ новостей: факты связаны в гипотезы роста, сделок и конкретные точки входа банка.
-                  </p>
-                </div>
-                <div className="analysisModel">
-                  {data.strategicAnalysis.insights.length} приоритетных идей
-                </div>
-              </section>
-
-              <section className="analysisSummary">
-                <div>
-                  <span>Диагноз</span>
-                  <p>{data.strategicAnalysis.executiveSummary}</p>
-                </div>
-                {data.strategicAnalysis.strategicRead && (
-                  <div>
-                    <span>Главный вывод</span>
-                    <p>{data.strategicAnalysis.strategicRead}</p>
-                  </div>
-                )}
-              </section>
-
-              <section className="insightsGrid">
-                {data.strategicAnalysis.insights.map(function(insight, index) {
-                  return (
-                    <article className="insightCard" key={insight.id || index}>
-                      <div className="insightTop">
-                        <div className="insightTags">
-                          <span className="insightType">{insight.type}</span>
-                          <span className={"basisTag " + (insight.basis === "Факт" ? "fact" : "hypothesis")}>
-                            {insight.basis}
-                          </span>
-                        </div>
-                        <span className={"priority priority" + insight.priority}>
-                          {insight.priority}
-                        </span>
-                      </div>
-
-                      <h3>{index + 1}. {insight.title}</h3>
-
-                      {insight.signal && (
-                        <div className="insightSection">
-                          <b>Сигнал</b>
-                          <p>{insight.signal}</p>
-                        </div>
-                      )}
-
-                      {insight.whyItMatters && (
-                        <div className="insightSection">
-                          <b>Почему это важно</b>
-                          <p>{insight.whyItMatters}</p>
-                        </div>
-                      )}
-
-                      {insight.move && (
-                        <div className="insightSection moveSection">
-                          <b>Что можно делать</b>
-                          <p>{insight.move}</p>
-                        </div>
-                      )}
-
-                      {insight.bankRole && (
-                        <div className="insightSection bankSection">
-                          <b>Где встраивается банк</b>
-                          <p>{insight.bankRole}</p>
-                        </div>
-                      )}
-
-                      {insight.bankRevenue && insight.bankRevenue.length > 0 && (
-                        <div className="revenueRow">
-                          {insight.bankRevenue.map(function(item, revenueIndex) {
-                            return <span key={revenueIndex}>{item}</span>;
-                          })}
-                        </div>
-                      )}
-
-                      {insight.evidence && insight.evidence.length > 0 && (
-                        <div className="evidenceRow">
-                          <b>Основание:</b>
-                          {insight.evidence.map(function(source) {
-                            return source.url ? (
-                              <a
-                                key={source.id}
-                                href={source.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={source.title}
-                              >
-                                {source.id} · {source.sourceName}
-                              </a>
-                            ) : (
-                              <span key={source.id}>{source.id} · {source.sourceName}</span>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
-              </section>
-
-              {data.strategicAnalysis.questions && data.strategicAnalysis.questions.length > 0 && (
-                <section className="questionsCard">
-                  <div>
-                    <span>ВОПРОСЫ НА ВСТРЕЧУ</span>
-                    <h3>Что проверить у клиента</h3>
-                  </div>
-                  <ol>
-                    {data.strategicAnalysis.questions.map(function(question, index) {
-                      return <li key={index}>{question}</li>;
-                    })}
-                  </ol>
-                </section>
-              )}
-            </>
-          )}
-
-          {data.strategicAnalysis && data.strategicAnalysis.status === "error" && (
-            <section className="analysisUnavailable">
-              <b>Стратегический разбор временно недоступен.</b>
-              <span>{data.strategicAnalysis.reason || "Не удалось выполнить глубокий анализ."}</span>
-            </section>
-          )}
 
           <section className="newsHeader">
             <div>
-              <h2>Хронология</h2>
+              <h2>Новости компании</h2>
               <p>{data.methodology}</p>
             </div>
           </section>
 
           {data.events.length === 0 ? (
             <section className="emptyPanel">
-              <strong>За последние 90 дней событий не найдено</strong>
-              <p>Если это выглядит неправдоподобно, значит нужно дорабатывать именно идентификацию рабочего названия компании.</p>
+              <strong>Содержательных публикаций не нашли</strong>
+              <p>Лучше показать пустую ленту, чем новости чужой компании или случайные упоминания.</p>
             </section>
           ) : (
             <section className="timeline">
@@ -400,14 +241,29 @@ export default function Home() {
                     </div>
 
                     <div className="timelineContent">
-                      <div className="eventCategory">{event.category}</div>
-                      <h3>{event.title}</h3>
-                      <p>{event.details}</p>
+                      <div className="newsTopline">
+                        <div className="eventCategory">{event.category}</div>
+                        {event.sourceName && (
+                          <div className="sourceName">{event.sourceName}</div>
+                        )}
+                      </div>
 
-                      {event.mentions > 1 && (
-                        <div className="mentions">
-                          Найдено в {event.mentions} публикациях
-                        </div>
+                      <h3>
+                        {event.url ? (
+                          <a href={event.url} target="_blank" rel="noreferrer">
+                            {event.title}
+                          </a>
+                        ) : (
+                          event.title
+                        )}
+                      </h3>
+
+                      {event.details && <p>{event.details}</p>}
+
+                      {event.url && (
+                        <a className="readSource" href={event.url} target="_blank" rel="noreferrer">
+                          Открыть источник ↗
+                        </a>
                       )}
                     </div>
                   </article>
@@ -421,10 +277,10 @@ export default function Home() {
               <div>
                 <strong>
                   {selected.length
-                    ? "Выбрано событий: " + selected.length
-                    : "Выберите события для письма"}
+                    ? "Выбрано публикаций: " + selected.length
+                    : "Можно отметить нужные публикации"}
                 </strong>
-                <span>Письмо будет собрано только из отмеченных событий.</span>
+                <span>Из отмеченных новостей соберём короткий черновик письма.</span>
               </div>
 
               <button onClick={openLetter}>Составить письмо</button>
@@ -434,7 +290,7 @@ export default function Home() {
       )}
 
       <footer>
-        Client Radar собирает публичные публикации и сводит их в краткую хронологию.
+        Client Radar ищет публичные материалы о конкретной компании и показывает их в хронологическом порядке.
       </footer>
 
       {letterOpen && (
