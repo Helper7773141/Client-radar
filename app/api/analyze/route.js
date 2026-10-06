@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const LOOKBACK_DAYS = 90;
+const LOOKBACK_DAYS = 365;
 
 const TRUSTED_DOMAINS = [
   "interfax.ru","tass.ru","rbc.ru","kommersant.ru","vedomosti.ru",
@@ -667,9 +667,13 @@ function trustedDomainQueries(alias) {
 function eventQueries(alias) {
   const q = '"' + alias + '"';
   return [
-    q + " (облигации OR кредит OR рейтинг OR рефинансирование OR дивиденды OR EBITDA OR прибыль)",
-    q + " (инвестиции OR строительство OR модернизация OR производство OR продажи OR экспорт OR импорт)",
-    q + " (контракт OR тендер OR сделка OR акционер OR директор OR санкции OR налог OR суд)"
+    q + " (сделка OR приобрел OR приобрела OR купил OR купила OR продал OR продала OR доля OR инвестор OR акционер OR M&A)",
+    q + " (инвестиции OR строительство OR модернизация OR производство OR завод OR мощности OR открыл OR открыла OR запустил OR запустила)",
+    q + " (выручка OR прибыль OR EBITDA OR долг OR облигации OR дивиденды OR кредит OR финансирование)",
+    q + " (партнерство OR контракт OR тендер OR соглашение OR совместное предприятие OR JV)",
+    q + " (директор OR гендиректор OR собственник OR владелец OR акционер OR руководство)",
+    q + " (экспорт OR импорт OR международный OR Казахстан OR Узбекистан OR Китай OR ОАЭ OR Турция)",
+    q + " (суд OR иск OR санкции OR ФАС OR налог OR регулятор)"
   ];
 }
 
@@ -704,19 +708,79 @@ function dedupeArticles(items) {
   return Array.from(map.values());
 }
 
-function relevant(article, aliases, profile) {
-  if (article.exact) return true;
+function materialityScore(text) {
+  const value = normalize(text);
+  let score = 0;
 
-  const text = normalize(
-    article.title + " " + article.description
-  );
+  const groups = [
+    { points: 26, patterns: [/приобрел|приобрела|купил|купила|продал|продала|сделк|дол[яи]|инвестор|акционер|m a/] },
+    { points: 22, patterns: [/завод|производств|мощност|строител|модерниз|инвестиц|капвлож|цод|склад|фабрик/] },
+    { points: 20, patterns: [/выручк|прибыл|ebitda|убыт|долг|облигац|дивиденд|кредит|финансирован/] },
+    { points: 18, patterns: [/контракт|тендер|соглашен|партнерств|совместн.*предприят|jv/] },
+    { points: 17, patterns: [/экспорт|импорт|зарубеж|международ|локализац|казахстан|узбекистан|китай|оаэ|турц/] },
+    { points: 16, patterns: [/директор|гендиректор|собственник|владелец|руководств|совет директоров/] },
+    { points: 15, patterns: [/суд|иск|санкц|фас|штраф|налог|регулятор/] },
+    { points: 13, patterns: [/запустил|запустила|открыл|открыла|нов.*продукт|нов.*сервис|маркетплейс|платформ/] }
+  ];
 
-  if (profile.inn && text.includes(profile.inn)) return true;
-
-  return aliases.some(function(alias) {
-    const a = normalize(alias);
-    return a.length >= 3 && text.includes(a);
+  groups.forEach(function(group) {
+    if (group.patterns.some(function(pattern) { return pattern.test(value); })) {
+      score += group.points;
+    }
   });
+
+  return score;
+}
+
+function companyMatchScore(article, aliases, profile) {
+  const title = normalize(article.title);
+  const text = normalize(article.title + " " + article.description);
+  let score = 0;
+
+  if (profile.inn && text.includes(profile.inn)) score += 100;
+
+  aliases.forEach(function(alias) {
+    const a = normalize(alias);
+    if (a.length < 3) return;
+    if (title.includes(a)) score += 50;
+    else if (text.includes(a)) score += 20;
+  });
+
+  if (profile.management && profile.management.name) {
+    const surname = normalize(profile.management.name).split(" ")[0];
+    if (surname && surname.length >= 4 && text.includes(surname)) score += 6;
+  }
+
+  if (TRUSTED_DOMAINS.some(function(domain) {
+    return article.domain === domain || article.domain.endsWith("." + domain);
+  })) score += 10;
+
+  if (DIRECTORY_DOMAINS.some(function(domain) {
+    return article.domain === domain || article.domain.endsWith("." + domain);
+  })) score -= 100;
+
+  return score;
+}
+
+function relevant(article, aliases, profile) {
+  return companyMatchScore(article, aliases, profile) >= 20;
+}
+
+function selectionScore(article, aliases, profile) {
+  let score = companyMatchScore(article, aliases, profile);
+  score += materialityScore(article.title + " " + article.description);
+
+  if (article.url && !String(article.url).includes("news.google.com")) score += 5;
+  if (clean(article.description).length >= 80) score += 4;
+
+  const d = parseDate(article.date);
+  if (d) {
+    const ageDays = Math.max(0, (Date.now() - d.getTime()) / 86400000);
+    if (ageDays <= 30) score += 5;
+    else if (ageDays <= 90) score += 3;
+  }
+
+  return score;
 }
 
 function tokenSet(value) {
@@ -931,11 +995,13 @@ export async function POST(request) {
     const mainAlias = aliases[0] || compactLegalName(profile.name);
     const jobs = [];
 
-    aliases.slice(0, 2).forEach(function(alias) {
+    aliases.slice(0, 4).forEach(function(alias) {
       jobs.push(googleNews('"' + alias + '"', "ru", true));
       jobs.push(bingNews('"' + alias + '"', true));
       jobs.push(gdelt(alias));
     });
+
+    jobs.push(googleNews('"' + profile.inn + '"', "ru", true));
 
     eventQueries(mainAlias).forEach(function(query) {
       jobs.push(googleNews(query, "ru", true));
@@ -977,10 +1043,46 @@ export async function POST(request) {
       return relevant(article, aliases, profile);
     });
 
-    const clustered = cluster(filtered);
-    let events = await Promise.all(clustered.map(enrichCluster));
+    const selectedArticles = filtered
+      .map(function(article) {
+        return {
+          article: article,
+          score: selectionScore(article, aliases, profile)
+        };
+      })
+      .sort(function(a,b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return (parseDate(b.article.date)?.getTime() || 0) - (parseDate(a.article.date)?.getTime() || 0);
+      })
+      .slice(0, 28)
+      .map(function(item) { return item.article; });
 
-    events = events
+    let events = await Promise.all(selectedArticles.map(async function(article, index) {
+      const pseudoCluster = {
+        category: (classifyHeadline(article.title + " " + article.description) || {}).category || "Новости компании",
+        analysis: classifyHeadline(article.title + " " + article.description),
+        items: [article]
+      };
+      const event = await enrichCluster(pseudoCluster);
+      return Object.assign({}, event, {
+        id: "news-" + index + "-" + normalize(article.title).slice(0, 20),
+        title: article.title,
+        sourceName: article.sourceName || article.domain || "Источник",
+        domain: article.domain || "",
+        url: article.url || null,
+        mentions: 1
+      });
+    }));
+
+    const uniqueEvents = [];
+    events.forEach(function(event) {
+      const duplicate = uniqueEvents.some(function(existing) {
+        return similarity(existing.title, event.title) >= 0.72;
+      });
+      if (!duplicate) uniqueEvents.push(event);
+    });
+
+    events = uniqueEvents
       .sort(function(a,b) {
         return new Date(b.date) - new Date(a.date);
       })
@@ -1000,7 +1102,7 @@ export async function POST(request) {
       },
       lookbackDays: LOOKBACK_DAYS,
       methodology:
-        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам из нескольких новостных каналов и доверенных доменов. Дубли склеиваем, события выводим по времени."
+        "Определяем юрлицо и рабочие названия, широко ищем публикации по компании и связанным лицам, отбираем наиболее содержательные материалы и показываем до 20 отдельных публикаций по времени. Похожие дубли убираем, но разные статьи в одно событие не склеиваем."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
