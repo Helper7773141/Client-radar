@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { classifyHeadline } from "../../../lib/intelligence";
+import { classifyHeadline, sectorKeywords } from "../../../lib/intelligence";
+import { buildStrategicAnalysis } from "../../../lib/strategic";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const LOOKBACK_DAYS = 90;
 
@@ -83,10 +84,11 @@ function parseDate(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function withinLookback(value) {
+function withinLookback(value, lookbackDays) {
   const d = parseDate(value);
   if (!d) return false;
-  const min = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const days = Number(lookbackDays) > 0 ? Number(lookbackDays) : LOOKBACK_DAYS;
+  const min = Date.now() - days * 24 * 60 * 60 * 1000;
   return d.getTime() >= min && d.getTime() <= Date.now() + 24 * 60 * 60 * 1000;
 }
 
@@ -414,14 +416,15 @@ function stripSourceSuffix(title, sourceName) {
     : value;
 }
 
-async function googleNews(query, locale, exact) {
+async function googleNews(query, locale, exact, lookbackDays) {
   const loc = locale === "en"
     ? "&hl=en-US&gl=US&ceid=US:en"
     : "&hl=ru&gl=RU&ceid=RU:ru";
+  const days = Number(lookbackDays) > 0 ? Number(lookbackDays) : LOOKBACK_DAYS;
 
   const url =
     "https://news.google.com/rss/search?q=" +
-    encodeURIComponent(query + " when:" + LOOKBACK_DAYS + "d") +
+    encodeURIComponent(query + " when:" + days + "d") +
     loc;
 
   const response = await safeFetch(url, {
@@ -449,7 +452,7 @@ async function googleNews(query, locale, exact) {
       channel: "google"
     };
   }).filter(function(x) {
-    return x.title && withinLookback(x.date);
+    return x.title && withinLookback(x.date, days);
   });
 }
 
@@ -927,6 +930,7 @@ export async function POST(request) {
     const identity = resolved[0];
     const network = resolved[1];
     const aliases = buildAliases(profile, identity);
+    const sectorTerms = sectorKeywords(profile.okved, profile.name).slice(0, 2);
 
     const mainAlias = aliases[0] || compactLegalName(profile.name);
     const jobs = [];
@@ -965,11 +969,54 @@ export async function POST(request) {
         jobs.push(bingNews(query, true));
       });
 
-    const settled = await Promise.allSettled(jobs);
+    const strategicHistoryJobs = [
+      googleNews(
+        '"' + mainAlias + '" (приобрел OR приобрела OR купил OR купила OR продал OR продала OR сделка OR доля OR инвестор OR совместное предприятие OR партнерство)',
+        "ru",
+        true,
+        365
+      ),
+      googleNews(
+        '"' + mainAlias + '" (стратегия OR запустил OR запустила OR расширение OR новый рынок OR производство OR завод OR платформа OR сервис OR выручка OR прибыль)',
+        "ru",
+        true,
+        365
+      )
+    ];
+
+    const benchmarkJobs = [];
+    sectorTerms.forEach(function(term) {
+      benchmarkJobs.push(
+        googleNews(
+          '"' + term + '" (сделка OR приобрел OR купил OR продал OR инвестиции OR запуск OR расширение OR производство OR рынок)',
+          "ru",
+          false
+        )
+      );
+    });
+
+    const searchResults = await Promise.all([
+      Promise.allSettled(jobs),
+      Promise.allSettled(strategicHistoryJobs),
+      Promise.allSettled(benchmarkJobs)
+    ]);
+    const settled = searchResults[0];
+    const strategicHistorySettled = searchResults[1];
+    const benchmarkSettled = searchResults[2];
 
     let all = [];
     settled.forEach(function(result) {
       if (result.status === "fulfilled") all = all.concat(result.value);
+    });
+
+    let strategicHistoryAll = [];
+    strategicHistorySettled.forEach(function(result) {
+      if (result.status === "fulfilled") strategicHistoryAll = strategicHistoryAll.concat(result.value);
+    });
+
+    let benchmarkAll = [];
+    benchmarkSettled.forEach(function(result) {
+      if (result.status === "fulfilled") benchmarkAll = benchmarkAll.concat(result.value);
     });
 
     const collected = dedupeArticles(all);
@@ -977,8 +1024,42 @@ export async function POST(request) {
       return relevant(article, aliases, profile);
     });
 
+    const strategicHistory = dedupeArticles(strategicHistoryAll)
+      .filter(function(article) {
+        return relevant(article, aliases, profile);
+      })
+      .filter(function(article) {
+        return !filtered.some(function(current) {
+          return articleKey(current) === articleKey(article);
+        });
+      })
+      .slice(0, 24);
+
+    const strategicEvidence = dedupeArticles(filtered.concat(strategicHistory));
+
+    const benchmarkArticles = dedupeArticles(benchmarkAll)
+      .filter(function(article) {
+        return TRUSTED_DOMAINS.some(function(domain) {
+          return article.domain === domain || article.domain.endsWith("." + domain);
+        });
+      })
+      .slice(0, 20);
+
     const clustered = cluster(filtered);
-    let events = await Promise.all(clustered.map(enrichCluster));
+    const analysisJobs = await Promise.all([
+      Promise.all(clustered.map(enrichCluster)),
+      buildStrategicAnalysis({
+        profile: profile,
+        aliases: aliases,
+        network: network,
+        sectorTerms: sectorTerms,
+        companyArticles: strategicEvidence,
+        benchmarkArticles: benchmarkArticles
+      })
+    ]);
+
+    let events = analysisJobs[0];
+    const strategicAnalysis = analysisJobs[1];
 
     events = events
       .sort(function(a,b) {
@@ -993,14 +1074,17 @@ export async function POST(request) {
       subsidiaries: network.subsidiaries,
       relatedCompanies: network.relatedCompanies,
       events: events,
+      strategicAnalysis: strategicAnalysis,
       stats: {
         collected: collected.length,
         relevant: filtered.length,
+        strategicEvidence: strategicEvidence.length,
+        benchmarks: benchmarkArticles.length,
         events: events.length
       },
       lookbackDays: LOOKBACK_DAYS,
       methodology:
-        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам из нескольких новостных каналов и доверенных доменов. Дубли склеиваем, события выводим по времени."
+        "Сначала определяем юрлицо и подтвержденные связи через DaData, затем собираем публикации по рабочим названиям компании и связанным лицам. Отдельно собираем отраслевые сигналы для бенчмаркинга. Хронология остается доказательной базой, а стратегический слой связывает факты в конкретные идеи для бизнеса и банка."
     });
   } catch (error) {
     const code = error && error.code ? error.code : "ANALYSIS_ERROR";
