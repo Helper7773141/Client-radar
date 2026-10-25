@@ -43,7 +43,7 @@ function Card({item,saved,toggle}){
    {busy?<p className="detail-muted">Получаем содержание с сайта Банка России…</p>:
     error?<><p className="detail-muted">Сейчас не удалось прочитать источник: {error}. Ссылка на оригинал доступна ниже.</p><button className="retry" onClick={load}>Попробовать ещё раз</button></>:
     hasSummary?<><ul>{(summary.points||[]).filter(x=>x!==summary.short).slice(0,4).map((text,i)=><li key={i}>{text}</li>)}</ul>
-     {summary.effectiveAt&&item.category==="acts"&&<p className="detail-muted">Возможная дата действия: {summary.effectiveAt} — проверьте текст нормативного акта.</p>}
+     {summary.effectiveAt&&item.category==="acts"&&<p className="detail-muted">Возможная дата действия: {summary.effectiveAt} — проверьте текст нормативного акта.</p>}{summary.effectiveRule&&(item.category==="acts"||item.category==="projects")&&<p className="detail-note"><b>Условие действия в тексте:</b> {summary.effectiveRule}</p>}
      <p className="detail-note">{summary.method==="ai"?"Сформировано ИИ по найденному тексту. Требуется проверка по источнику.":summary.method==="structured-data"?"Значения извлечены из таблицы первоисточника.":"Факты автоматически выбраны из опубликованного текста, без ИИ-интерпретации."}</p>
     </>:<p className="detail-muted">Содержание ещё не обработано. Исходный документ можно открыть на сайте ЦБ.</p>}
   </section>}
