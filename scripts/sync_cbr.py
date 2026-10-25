@@ -368,6 +368,9 @@ def run():
  for id,item in current.items():
   if id in archive:
    prev=archive[id]
+   # Re-extract a publication when its announced update date changes.
+   if prev.get("publishedAt") and item.get("publishedAt") and prev["publishedAt"]!=item["publishedAt"]:
+    prev.pop("summary",None)
    # A data page reuses its URL; refresh published rows even when link is unchanged.
    if prev.get("summary") and item["category"]!="data":item["summary"]=prev["summary"]
    archive[id]={**prev,**item,"firstSeenAt":prev.get("firstSeenAt") or item.get("firstSeenAt")}
