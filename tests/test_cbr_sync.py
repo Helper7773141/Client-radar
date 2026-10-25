@@ -52,6 +52,17 @@ class CbrCrawlerTests(unittest.TestCase):
         self.assertIn("банковской отчетности",items[0]["title"])
         self.assertEqual(items[0]["category"],"projects")
 
+    def test_xlsx_is_extracted_as_data(self):
+        import io, zipfile
+        x=io.BytesIO()
+        with zipfile.ZipFile(x,"w") as z:
+            z.writestr("xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"></workbook>')
+            z.writestr("xl/sharedStrings.xml", '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>Дата</t></si></sst>')
+            z.writestr("xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>14.20</v></c></row></sheetData></worksheet>')
+        text=crawler.xlsx_content(x.getvalue())
+        self.assertIn("Дата",text)
+        self.assertIn("14.20",text)
+
     def test_empty_pdf_is_not_summarized(self):
         import fitz
         doc=fitz.open()
