@@ -4,7 +4,7 @@ export const dynamic="force-dynamic";
 export const maxDuration=30;
 
 const cache=new Map();
-const BLOCKED=new Set(["/"]);
+
 function allowed(input){
   const url=new URL(input);
   if(url.protocol!=="https:"||!["cbr.ru","www.cbr.ru"].includes(url.hostname.toLowerCase())||url.username||url.password)throw Error("Разрешены только официальные страницы Банка России");
@@ -29,34 +29,46 @@ async function download(input){
   }
   throw Error("Слишком много переадресаций");
 }
-function extract(html){
+function extract(html,url){
  const $=load(html);
  $("script,style,noscript,header,footer,nav,aside,form,iframe,svg,.cookie,.cookies,.cookie-popup,.breadcrumbs,.b-breadcrumbs,.share,.social,.footer,.header,.side-menu,.navigation,.b-side-menu").remove();
- const candidates=[".landing-text",".b-article",".b-article__body",".b-page__content",".page-content",".content-block",".b-text","[itemprop='articleBody']", "article", "main", "#content",".content"];
+ const candidates=[".landing-text",".b-article__body",".b-article",".b-page__content",".page-content",".content-block","[itemprop='articleBody']","article","main","#content",".content"];
  let best=[],score=0;
  for(const selector of candidates){
   $(selector).each((_,el)=>{
-   const $el=$(el);
-   const parts=$el.find("p,li,h2,h3").map((__,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>32&&x.length<2000);
-   const clean=parts.filter(x=>!/^(поделиться|материал подготовлен|при использовании материала|ссылки по теме|контактная информация)/i.test(x));
-   const length=clean.join(" ").length;
-   if(length>score){best=clean;score=length}
+   const parts=$(el).find("p,li,h2,h3").map((__,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>32&&x.length<2000);
+   const len=parts.join(" ").length;
+   if(len>score){best=parts;score=len}
   });
  }
- if(score<250){
-   let body=$("body").clone();
-   body.find("nav,header,footer,aside,.menu,.sidebar").remove();
-   const parts=body.find("p").map((_,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>35&&x.length<2000);
-   if(parts.join(" ").length>score)best=parts;
+ if(score<230){
+  const paragraphs=$("body p,body li").map((_,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>35&&x.length<1800);
+  if(paragraphs.join(" ").length>score){best=paragraphs;score=paragraphs.join(" ").length}
  }
- const lines=[];let total=0;
- for(const p of best){
-  const s=p.replace(/\s+/g," ").trim();
-  if(!s||lines.at(-1)===s)continue;
-  lines.push(s);total+=s.length;
-  if(total>33000)break;
+ const lines=[],seen=new Set();
+ for(const para of best){
+  const s=para.replace(/\s+/g," ").trim();
+  if(!s||seen.has(s))continue;
+  lines.push(s);seen.add(s);if(lines.join(" ").length>30000)break
  }
- return lines.join("\n\n");
+ let rows=[];
+ $("table").slice(0,4).each((_,t)=>{
+  $(t).find("tr").slice(0,16).each((__,tr)=>{
+   let cells=$(tr).find("td,th").map((___,td)=>$(td).text().replace(/\s+/g," ").trim()).get().filter(Boolean);
+   if(cells.length>=2&&cells.join(" · ").length<350)rows.push(cells.join(" · "))
+  })
+ });
+ const dataPage=/\/(hd_base|statistics)\//i.test(new URL(url).pathname) || (rows.length>1&&score<250);
+ if(dataPage&&rows.length){
+  return {text:rows.slice(0,11).concat(lines.slice(0,4)).join("\n"),method:"structured-data",points:rows.slice(0,6)}
+ }
+ const mainText=lines.join("\n\n");
+ if(mainText.length>=130)return {text:mainText,method:"extractive",points:[]};
+ const attachments=$("a[href]").map((_,el)=>{
+   let href=$(el).attr("href")||"";
+   return /\.pdf(\?|$)|\.docx(\?|$)|\/UniDbQuery\/File\//i.test(href)?href:"";
+ }).get().filter(Boolean);
+ return {text:mainText,method:"extractive",points:[],attachment:attachments[0]||null}
 }
 function pick(text,title){
  const parts=text.replace(/\n+/g," ").split(/(?<=[.!?])\s+(?=[А-ЯЁ«„])/u).map(x=>x.trim()).filter(x=>x.length>48&&x.length<660).slice(0,105);
@@ -89,11 +101,12 @@ export async function GET(request){
  if(old&&Date.now()-old.ts<30*60*1000)return Response.json(old.value,{"headers":{"Cache-Control":"public, s-maxage=600"}});
  try{
   const {html,url}=await download(key);
-  const text=extract(html);
-  if(text.length<130)throw Error("Полный текст не удалось извлечь: на странице может быть только ссылка на вложенный документ");
+  const info=extract(html,url);
+  const text=info.text;
+  if(text.length<100)throw Error(info.attachment?"Публикация содержит вложенный документ. Его анализирует фоновый обработчик PDF/DOCX.":"Не удалось извлечь читаемый текст. Первоисточник доступен по ссылке.");
   const $=load(html);const title=$("h1").first().text().replace(/\s+/g," ").trim().slice(0,500)||$("title").first().text().trim();
-  const summary=await aiSummary(text,title)||pick(text,title);
-  const value={...summary,title,url,charactersRead:text.length,processedAt:new Date().toISOString()};
+  const summary=info.method==="structured-data"?{short:"Последние опубликованные показатели: "+info.points.slice(0,3).join("; ").slice(0,570),points:info.points,method:"structured-data",sourceFormat:"html-table"}:await aiSummary(text,title)||pick(text,title);
+  const value={...summary,title,url,charactersRead:text.length,processedAt:new Date().toISOString(),sourceFormat:summary.sourceFormat||"html"};
   cache.set(key,{ts:Date.now(),value});if(cache.size>300)cache.delete(cache.keys().next().value);
   return Response.json(value,{headers:{"Cache-Control":"public, s-maxage=600, stale-while-revalidate=3600"}});
  }catch(e){return Response.json({error:e.message||"Не удалось прочитать источник"},{status:502,headers:{"Cache-Control":"no-store"}})}
