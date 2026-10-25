@@ -45,6 +45,7 @@ jobs:
       - name: Save snapshot without redeploy
         run: |
           cp data/feed.json /tmp/cbr-feed-new.json
+          rm -f data/feed.json
           git checkout -B cbr-feed-data origin/cbr-feed-data
           mkdir -p data
           cp /tmp/cbr-feed-new.json data/feed.json
