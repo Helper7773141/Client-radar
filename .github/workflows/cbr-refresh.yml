@@ -9,6 +9,7 @@ on:
       - "scripts/sync_cbr.py"
       - ".github/workflows/cbr-refresh.yml"
       - "requirements-monitor.txt"
+      - "tests/**"
 permissions:
   contents: write
 concurrency:
