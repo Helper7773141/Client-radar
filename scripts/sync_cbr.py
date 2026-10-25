@@ -318,9 +318,15 @@ def digest(text,typ,title):
   if not 50<len(s)<590:continue
   sl=s.lower()
   if any(skip in sl for skip in ("персональных данных","при использовании материала ссылка","все права защищены")):continue
+  if typ in ("pdf","docx") and re.search(r"проект|указани|положени",title,re.I):
+   # Cover pages and statutory authority references are not the operative changes.
+   if ("центральный банк российской федерации" in sl and ("у к а з а н и е" in sl or "на основании части" in sl)) or sl.startswith("проект центральный банк"):continue
+   if sl.startswith("москва о внесении изменений") or ("на основании части" in sl and "федерального закона" in sl and "внести" not in sl):continue
   score=(4-i if i<4 else 0)+sum(1.1 for word in TERMS if word in sl)
   score+=min(4,len(re.findall(r"\d[\d\s.,–-]*\s*(?:%|руб|млрд|млн|дн|год|ставк)",sl))*1.8)
   if len(s)>370:score-=1
+  if re.search(r"внести|изменени|дополнить|заменить|исключить|установить|предусмотреть|вступает в силу",sl,re.I):score+=5
+  if re.search(r"зарегистрировано минюстом россии|протокол заседания совета директоров",sl,re.I):score-=5
   ranked.append((score,i,s))
  ranked=sorted(ranked,key=lambda x:(-x[0],x[1]))[:5]
  ranked.sort(key=lambda x:x[1])
@@ -356,7 +362,10 @@ def run():
  except Exception:prior={}
  archive={e["id"]:e for e in prior.get("entries",[]) if e.get("id")}
  for item in archive.values():
-  if item.get("summary") and item["summary"].get("pipelineVersion")!=3:
+  sm=item.get("summary")
+  if sm and (sm.get("pipelineVersion")!=3 or
+    (item.get("category") in ("acts","projects") and
+    re.search(r"проект центральный банк российской федерации|на основании части.{0,90}федерального закона",sm.get("short",""),re.I))):
    item.pop("summary",None)
  with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
   results=list(executor.map(parse_rss,FEEDS)) + list(executor.map(parse_index,EXTRA))
