@@ -24,6 +24,7 @@ FEEDS=[
  ("acts","Нормативные акты","https://www.cbr.ru/rss/navr","acts"),
  ("projects","Проекты актов","https://www.cbr.ru/rss/project","projects"),
 ]
+INDEX_PAGES={"updates":"https://www.cbr.ru/development/RSS/","press":"https://www.cbr.ru/press/","events":"https://www.cbr.ru/news/","acts":"https://www.cbr.ru/analytics/na_vr/","projects":"https://www.cbr.ru/project_na/"}
 FILE=Path("data/feed.json")
 UTC=dt.timezone.utc
 MAX_BYTES=7_000_000
@@ -103,8 +104,8 @@ def parse_rss(feed):
    entries.append({"id":link.lower().rstrip("/"),"url":link,"title":title,"excerpt":desc[:400],
     "publishedAt":parse_time(field("pubDate")),"effectiveAt":None,"category":c,
     "topic":topic_for(title),"priority":importance(title,c),"sourceId":sid,"sourceName":name})
-  return {"id":sid,"name":name,"ok":True,"count":len(entries)},entries
- except Exception as e:return {"id":sid,"name":name,"ok":False,"count":0,"error":str(e)[:180]},[]
+  return {"id":sid,"name":name,"page":INDEX_PAGES[sid],"ok":True,"count":len(entries)},entries
+ except Exception as e:return {"id":sid,"name":name,"page":INDEX_PAGES[sid],"ok":False,"count":0,"error":str(e)[:180]},[]
 
 def clean_list(items,minlen=28):
  out=[];seen=set()
@@ -178,16 +179,16 @@ def docx_content(data):
 
 def source_text(url):
  b,kind,final=fetch(url)
- if "pdf" in kind or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
- if "wordprocessingml" in kind or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+ if "pdf" in kind or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
+ if "wordprocessingml" in kind or b.startswith(b"PK\\x03\\x04") or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if not ("html" in kind or "text/" in kind or not kind):raise ValueError("Unsupported content type "+kind[:65])
  info=html_content(b.decode("utf-8","replace"),final)
  text,typ=info["text"],info["kind"]
  if len(text)<180 and info["attachment"]:
   attachment=info["attachment"]
   b,k,final=fetch(attachment)
-  if "pdf" in k or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
-  if "wordprocessingml" in k or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+  if "pdf" in k or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
+  if "wordprocessingml" in k or b.startswith(b"PK\\x03\\x04") or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if len(text)<100:raise ValueError("No usable content in HTML/table or attachment")
  return text,typ,final
 
