@@ -120,7 +120,7 @@ def parse_index(source):
   seen=set();items=[]
   def emit(title,link,date_hint=None):
    title=re.sub(r"\s+"," ",title).strip()
-   if len(title)<45 or len(title)>850:return
+   if len(title)<45 or len(title)>2200:return
    try:safe_url(link)
    except ValueError:return
    if link in seen:return
@@ -153,10 +153,10 @@ def parse_index(source):
     prior=a.find_previous(string=re.compile(r"Проект\s+(?:указани|положени|инструкци|нормативн)",re.I))
     title=str(prior).strip() if prior else ""
     title=re.sub(r"\s+"," ",title).strip()
-    if len(title)<45 or len(title)>850:
+    if len(title)<45 or len(title)>2200:
      container=a.parent.parent if a.parent and a.parent.parent else a.parent
      title=container.get_text(" ",strip=True) if container else anchor_text
-     title=re.sub(r"\s+"," ",title).strip()[:800]
+     title=re.sub(r"\s+"," ",title).strip()[:2100]
     if re.search(r"проект",title,re.I):emit(title,href)
    for h in soup.find_all(["h2","h3","h4","h5"]):
     title=h.get_text(" ",strip=True)
