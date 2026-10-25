@@ -1,50 +1,53 @@
 "use client";
 import {useEffect,useMemo,useState} from "react";
-const sections=[["all","Вся лента"],["acts","Нормативные акты"],["projects","Проекты"],["press","Пресс-релизы"],["events","Новости и события"]];
-const labels={acts:"Нормативный акт",projects:"Проект",press:"Пресс-релиз",events:"Новость",news:"Публикация"};
+const sections=[["all","Вся лента"],["acts","Нормативные акты"],["projects","Проекты"],["press","Пресс-релизы"],["events","Новости и события"],["data","Данные и ставки"]];
+const labels={acts:"Нормативный акт",projects:"Проект",press:"Пресс-релиз",events:"Новость",news:"Публикация",data:"Данные"};
 const fmt=(v,time=false)=>{if(!v)return "Не указана";let d=new Date(v);if(isNaN(+d))return "Не указана";return new Intl.DateTimeFormat("ru-RU",time?{hour:"2-digit",minute:"2-digit",timeZone:"Europe/Moscow"}:{day:"2-digit",month:"long",year:"numeric",timeZone:"Europe/Moscow"}).format(d)+(time?" МСК":"")};
 function Mark(){return <span className="brand-mark"><i/><i/><i/><i/></span>}
 function Card({item,saved,toggle}){
- const [flipped,setFlipped]=useState(false);
+ const [expanded,setExpanded]=useState(false);
  const [summary,setSummary]=useState(item.summary||null);
  const [busy,setBusy]=useState(false);
- const [problem,setProblem]=useState("");
- async function loadSummary(){
-   if(!summary&&!busy){
-     setBusy(true);setProblem("");
-     try{
-       const r=await fetch("/api/summary?url="+encodeURIComponent(item.url));
-       const j=await r.json();
-       if(!r.ok)throw Error(j.error||"Не получилось извлечь текст");
-       setSummary(j);
-     }catch(e){setProblem(e.message||"Ошибка загрузки")}finally{setBusy(false)}
-   }
+ const [error,setError]=useState("");
+ useEffect(()=>{if(item.summary?.short)setSummary(item.summary)},[item.summary]);
+ const hasSummary=Boolean(summary?.short);
+ const usableExcerpt=Boolean(item.excerpt?.length>65);
+ const isData=item.category==="data";
+ async function load(){
+  if(busy)return;
+  setBusy(true);setError("");
+  try{
+   const r=await fetch("/api/summary?url="+encodeURIComponent(item.url),{cache:"no-store"});
+   const json=await r.json();
+   if(!r.ok||!json.short)throw Error(json.error||"Пока не удалось подготовить выдержку");
+   setSummary(json);
+  }catch(e){setError(e.message||"Источник временно недоступен")}
+  finally{setBusy(false)}
  }
- function turn(){const next=!flipped;setFlipped(next);if(next&&!summary&&!busy)loadSummary()}
- const ignore=e=>Boolean(e.target.closest("a,button,input,select"));
- return <article className="article flip-card" tabIndex={0} aria-label={"Публикация: "+item.title+". Нажмите Enter, чтобы открыть конспект"}
-  onClick={e=>{if(!ignore(e))turn()}}
-  onKeyDown={e=>{if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){e.preventDefault();turn()}}}>
- <div className={"flip-inner "+(flipped?"is-flipped":"")}>
-  <div className="flip-face flip-front">
-   <div className="card-top"><div className="tags"><span className={"tag tag-"+item.category}>{labels[item.category]||"Публикация"}</span><span className="tag-topic">{item.topic}</span>{item.priority==="high"&&<span className="tag-hot">● Важно</span>}</div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} title="Сохранить публикацию" aria-label="Сохранить публикацию">☆</button></div>
-   <h3><a target="_blank" rel="noopener noreferrer" href={item.url}>{item.title}</a></h3>
-   <p className="excerpt">{item.excerpt||"Анонс отсутствует. Переверните карточку — здесь появится конспект полного текста публикации."}</p>
-   <div className="facts"><div><span>ОПУБЛИКОВАНО</span><strong>{fmt(item.publishedAt)}</strong></div><div><span>{item.category==="projects"?"СТАТУС":item.category==="acts"?"НАЧАЛО ДЕЙСТВИЯ":"ТИП МАТЕРИАЛА"}</span><strong>{item.category==="projects"?"Проект · ещё не действует":item.category==="acts"?(item.effectiveAt?fmt(item.effectiveAt):"Не указана в анонсе"):(labels[item.category]||"Публикация")}</strong></div></div>
-   <div className="card-foot"><span>↗ {item.sourceName}</span><a href={item.url} target="_blank" rel="noopener noreferrer">Читать оригинал ↗</a></div>
-   <button className="flip-button" onClick={turn}><span>↻</span> Перевернуть — краткий конспект</button>
-  </div>
-  <div className="flip-face flip-back">
-   <div className="card-top"><span className="tag tag-acts">КРАТКИЙ КОНСПЕКТ</span><button className="flip-back-button" onClick={turn}>↶ Назад</button></div>
-   <h3>{item.title}</h3>
-   {busy?<div className="summary-state"><span className="loading-ring"/><b>Читаем текст на сайте ЦБ…</b><p>Извлекаем содержание, выделяем главное.</p></div>:
-   problem?<div className="summary-state"><b>Не удалось прочитать публикацию</b><p>{problem}</p><button onClick={loadSummary}>Повторить</button></div>:
-   summary?<><div className="summary-meta">{summary.method==="ai"?"✦ ИИ-конспект полного текста":"◈ Автоматическая выдержка из текста"} <span>·</span> {summary.charactersRead?.toLocaleString("ru-RU")} символов</div>
-     <div className="summary-body"><h4>Суть</h4><p>{summary.short}</p>{summary.points?.length>0&&<><h4>Главные факты</h4><ul>{summary.points.map((p,i)=><li key={i}>{p}</li>)}</ul></>}{summary.effectiveAt&&<p className="summary-effective">Дата действия по анализу: {summary.effectiveAt}</p>}</div>
-   </>:<div className="summary-state"><b>Нажмите, чтобы получить конспект</b></div>}
-   <div className="summary-footer"><a href={item.url} target="_blank" rel="noopener noreferrer">Открыть полный документ ЦБ ↗</a><small>{summary?.method==="ai"?"Данные требуют сверки с оригиналом":"Автовыдержка без ИИ; проверьте смысл по первоисточнику"}</small></div>
-  </div>
- </div>
+ function details(){setExpanded(v=>!v);if(!expanded&&!hasSummary&&!error)load()}
+ const type=item.category==="projects"?"Проект — не действует":item.category==="acts"?"Нормативный документ":isData?"Данные и показатели":labels[item.category]||"Публикация";
+ return <article className="article digest-card">
+  <div className="card-top"><div className="tags">
+   <span className={"tag tag-"+item.category}>{labels[item.category]|| (isData?"Данные":"Публикация")}</span>
+   <span className="tag-topic">{item.topic}</span>
+   {item.priority==="high"&&<span className="tag-hot">● Предварительно важное</span>}
+  </div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} aria-label={saved?"Убрать из сохранённого":"Сохранить публикацию"} title={saved?"Убрать из сохранённого":"Сохранить"}>{saved?"★":"☆"}</button></div>
+  <div className="digest-date">{fmt(item.publishedAt)} <span>·</span> {item.sourceName||"Банк России"}</div>
+  <h3><a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a></h3>
+  {hasSummary?<><p className="digest-summary">{summary.short}</p><div className="digest-method">{summary.method==="ai"?"✦ ИИ-конспект":summary.method==="structured-data"?"▤ Показатели из таблицы":"✓ Факты из оригинала"} <span>·</span> {summary.sourceFormat?.toUpperCase()||"HTML"}</div></>:
+    usableExcerpt?<><p className="digest-summary digest-pending">{item.excerpt.slice(0,310)}</p><div className="digest-method muted">◷ Пока только анонс · Полный текст в обработке</div></>:
+    <p className="digest-summary digest-pending">{isData?"Опубликованы новые показатели. Откройте детали для извлечения значений таблицы.":"Публикация найдена. Конспект готовится — текст источника ещё не обработан."}</p>}
+  <div className="digest-info"><span>{type}</span>{item.category==="acts"&&<span>{item.effectiveAt?"Начало действия: "+fmt(item.effectiveAt):"Дата действия требует проверки"}</span>}</div>
+  {expanded&&<section className="digest-details" aria-label="Детали и факты">
+   <h4>Ключевые факты из первоисточника</h4>
+   {busy?<p className="detail-muted">Получаем содержание с сайта Банка России…</p>:
+    error?<><p className="detail-muted">Сейчас не удалось прочитать источник: {error}. Ссылка на оригинал доступна ниже.</p><button className="retry" onClick={load}>Попробовать ещё раз</button></>:
+    hasSummary?<><ul>{(summary.points||[]).filter(x=>x!==summary.short).slice(0,4).map((text,i)=><li key={i}>{text}</li>)}</ul>
+     {summary.effectiveAt&&item.category==="acts"&&<p className="detail-muted">Возможная дата действия: {summary.effectiveAt} — проверьте текст нормативного акта.</p>}
+     <p className="detail-note">{summary.method==="ai"?"Сформировано ИИ по найденному тексту. Требуется проверка по источнику.":summary.method==="structured-data"?"Значения извлечены из таблицы первоисточника.":"Факты автоматически выбраны из опубликованного текста, без ИИ-интерпретации."}</p>
+    </>:<p className="detail-muted">Содержание ещё не обработано. Исходный документ можно открыть на сайте ЦБ.</p>}
+  </section>}
+  <div className="digest-actions"><button className="show-more" onClick={details} aria-expanded={expanded}>{expanded?"Свернуть ↑":hasSummary?"Все факты ↓":"Получить конспект ↓"}</button><a href={item.url} target="_blank" rel="noopener noreferrer">Первоисточник ↗</a></div>
  </article>;
 }
 
@@ -55,7 +58,7 @@ useEffect(()=>{try{setSaved(JSON.parse(localStorage.getItem("new-project-bookmar
 async function refresh(manual=false){if(manual)setRefreshing(true);try{const r=await fetch("/api/feed",{cache:"no-store"});const j=await r.json();if(!j.entries||!j.sources)throw Error("Недоступен ответ сервера");setData(j);setError(r.ok?"":"Источники временно не отвечают");}catch(e){setError(e.message||"Ошибка получения публикаций")}finally{setLast(new Date().toISOString());setLoading(false);setRefreshing(false)}}
 useEffect(()=>{refresh();const i=setInterval(()=>{if(!document.hidden)refresh()},15000);const handler=()=>{if(!document.hidden)refresh()};document.addEventListener("visibilitychange",handler);return()=>{clearInterval(i);document.removeEventListener("visibilitychange",handler)}},[]);
 const entries=data?.entries||[], good=data?.sources?.filter(x=>x.ok).length||0, topics=[...new Set(entries.map(x=>x.topic))].sort((a,b)=>a.localeCompare(b,"ru"));
-const filtered=useMemo(()=>{const q=search.toLocaleLowerCase("ru").trim();const a=entries.filter(x=>(!savedOnly||saved.includes(x.id))&&(tab==="all"||x.category===tab)&&(topic==="all"||x.topic===topic)&&(!q||(x.title+" "+x.excerpt+" "+x.topic).toLocaleLowerCase("ru").includes(q)));if(sort==="priority")a.sort((a,b)=>({high:0,medium:1,normal:2}[a.priority]-{high:0,medium:1,normal:2}[b.priority])||(Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0)));return a},[entries,saved,savedOnly,tab,topic,search,sort]);
+const filtered=useMemo(()=>{const q=search.toLocaleLowerCase("ru").trim();const a=entries.filter(x=>(!savedOnly||saved.includes(x.id))&&(tab==="all"||x.category===tab)&&(topic==="all"||x.topic===topic)&&(!q||(x.title+" "+(x.excerpt||"")+" "+x.topic+" "+(x.summary?.short||"")).toLocaleLowerCase("ru").includes(q)));if(sort==="priority")a.sort((a,b)=>({high:0,medium:1,normal:2}[a.priority]-{high:0,medium:1,normal:2}[b.priority])||(Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0)));return a},[entries,saved,savedOnly,tab,topic,search,sort]);
 function toggle(id){setSaved(old=>{let v=old.includes(id)?old.filter(x=>x!==id):[...old,id];try{localStorage.setItem("new-project-bookmarks",JSON.stringify(v))}catch{}return v})}
 function clear(){setTab("all");setSearch("");setTopic("all");setSavedOnly(false);setLimit(18)}
 return <div className="site"><header className="nav"><div className="container nav-in"><a href="/" className="logo"><Mark/>new<span>project</span><sup> /β</sup></a><div className="nav-menu"><a href="#feed">Публикации</a><a href="#how">Как работает</a><button onClick={()=>setShowSources(!showSources)}>Источники ↗</button></div><span className="nav-live"><i/>МОНИТОРИНГ ЦБ РФ</span></div></header>
@@ -65,9 +68,9 @@ return <div className="site"><header className="nav"><div className="container n
 <section className="workspace" id="feed"><div className="headline"><div><span className="overlabel">— ЕДИНАЯ ЛЕНТА</span><h2>В центре внимания<span>.</span></h2><p>Официальные публикации, без вымышленных новостей и дат.</p></div><div className="check-status"><i className={good?"ok-dot":"warn-dot"}/><div>{good?"Источники доступны":"Ожидание источников"}<small>Фоновая проверка: {data?.archiveUpdatedAt?fmt(data.archiveUpdatedAt,true):"ещё не запускалась"}</small></div><button className={refreshing?"spinning":""} title="Проверить сейчас" onClick={()=>refresh(true)} disabled={refreshing}>↻</button></div></div>
 {error&&<div className="error">ⓘ {error}. Новые публикации могут появляться с задержкой.</div>}
 <div className="control"><div className="tabs">{sections.map(([id,title])=><button key={id} onClick={()=>{setTab(id);setLimit(18)}} className={tab===id?"active":""}>{title}</button>)}</div><div className="filters"><label className="search"><span>⌕</span><input value={search} placeholder="Поиск по публикациям" onChange={e=>{setSearch(e.target.value);setLimit(18)}}/></label><select aria-label="Тема" value={topic} onChange={e=>setTopic(e.target.value)}><option value="all">Все темы</option>{topics.map(x=><option key={x}>{x}</option>)}</select><select aria-label="Сортировка" value={sort} onChange={e=>setSort(e.target.value)}><option value="newest">Сначала новые</option><option value="priority">Сначала важные</option></select><button className={"favorites "+(savedOnly?"on":"")} onClick={()=>setSavedOnly(!savedOnly)}>☆ Сохранённое</button></div></div>
-<div className="results"><span>{loading?"Загружаем публикации…":<>Найдено <b>{filtered.length}</b> публикаций</>}</span><span>● Фоновая проверка: каждые 5 минут · вкладка: 15 секунд</span></div>
+<div className="results"><span>{loading?"Загружаем публикации…":<>Найдено <b>{filtered.length}</b> публикаций</>}</span><span>● Целевой интервал фоновой проверки: 5 минут · открытая вкладка: 15 секунд</span></div>
 {loading?<div className="empty"><div className="loading-ring"/><h3>Получаем данные Банка России</h3><p>Проверяем официальные RSS-каналы…</p></div>:filtered.length?<><div className="cards">{filtered.slice(0,limit).map(x=><Card key={x.id} item={x} saved={saved.includes(x.id)} toggle={toggle}/>)}</div>{filtered.length>limit&&<div className="more"><button onClick={()=>setLimit(n=>n+18)}>Показать ещё →</button></div>}</>:<div className="empty"><h3>{data?.fresh?"Ничего не найдено":"Источники не ответили"}</h3><p>{data?.fresh?"Попробуйте изменить фильтры.":"Проверьте доступность ЦБ или откройте источник напрямую."}</p><button onClick={clear}>Сбросить фильтры</button></div>}
-<p className="disclaimer">ⓘ Анонсы на лицевой стороне взяты из RSS. На обратной стороне доступна автовыдержка из полной статьи, а при подключённом API ИИ — смысловой конспект. Если дата вступления в силу не подтверждена, она не подставляется автоматически. Принимайте решения только после проверки первоисточника.</p></section></main>
+<p className="disclaimer">ⓘ Краткие факты извлекаются из HTML, таблиц и поддерживаемых вложений. Без подключённого API ИИ это автоматическая выдержка, а не экспертное юридическое заключение. Если дата вступления в силу не подтверждена, она не подставляется автоматически. Принимайте решения только после проверки первоисточника.</p></section></main>
 <section className="method" id="how"><div className="container method-in"><div><span className="overlabel">ПРИНЦИП РАБОТЫ</span><h2>Меньше шума.<br/><span>Больше ясности.</span></h2></div><div className="steps"><div><small>01</small><h3>Собираем</h3><p>Пять официальных RSS-лент: новости, пресс-релизы, новые материалы, нормативные акты и проекты.</p></div><div><small>02</small><h3>Упорядочиваем</h3><p>Удаляем повторы ссылок, определяем темы и отмечаем потенциально важные публикации.</p></div><div><small>03</small><h3>Сверяем</h3><p>Открываем оригинал на сайте Банка России. Не выдумываем даты вступления в силу.</p></div></div></div></section>
 <footer><div className="container footer-in"><div className="footer-logo">new<span>project</span><small>Независимый мониторинг. Не является официальным сайтом Банка России.</small></div><div><a href="https://www.cbr.ru/" target="_blank" rel="noopener noreferrer">Банк России ↗</a><small>Время — московское. RSS-ленты не гарантируют полного охвата сайта.</small></div></div></footer></div>
 }
