@@ -41,6 +41,17 @@ class CbrCrawlerTests(unittest.TestCase):
         self.assertEqual(items[0]["category"],"data")
         self.assertTrue(items[0]["publishedAt"].startswith("2026-10-23"))
 
+    def test_project_index_with_div_header(self):
+        html='''<html><section><div>Проект указания Банка России «О новых требованиях к банковской отчетности кредитных организаций»</div>
+        <a href="/Content/Document/File/190123/proekt.pdf">Проект указания Банка России</a>
+        <a href="/Content/Document/File/190123/note.pdf">Пояснительная записка</a></section></html>'''.encode("utf8")
+        with patch.object(crawler,"fetch",return_value=(html,"text/html","https://www.cbr.ru/project_na/")):
+            state,items=crawler.parse_index(crawler.EXTRA[1])
+        self.assertTrue(state["ok"],state.get("error"))
+        self.assertEqual(len(items),1)
+        self.assertIn("банковской отчетности",items[0]["title"])
+        self.assertEqual(items[0]["category"],"projects")
+
     def test_empty_pdf_is_not_summarized(self):
         import fitz
         doc=fitz.open()
