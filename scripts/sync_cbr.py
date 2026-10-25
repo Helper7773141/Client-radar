@@ -329,7 +329,8 @@ def digest(text,typ,title):
   paras=clean_list(text.split("\n"),45)
   points=paras[:3]
  if not points:raise ValueError("Text is present but no informative excerpts found")
- return {"short":" ".join(points[:2])[:700],"points":points,"method":"extractive","sourceFormat":typ,"pipelineVersion":3}
+ rule=next((s.strip() for s in sentences if re.search(r"вступа(?:ет|ют)\\s+в\\s+силу|начина(?:ет|ют)\\s+действовать|применя(?:ет|ют)ся\\s+с",s,re.I) and 30<len(s)<550),None)
+ return {"short":" ".join(points[:2])[:700],"points":points,"effectiveRule":rule[:470] if rule else None,"method":"extractive","sourceFormat":typ,"pipelineVersion":3}
 
 def enrich(item):
  try:
