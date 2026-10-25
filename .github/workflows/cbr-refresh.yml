@@ -3,6 +3,12 @@ on:
   schedule:
     - cron: "2/5 * * * *"
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/sync_cbr.py"
+      - ".github/workflows/cbr-refresh.yml"
+      - "requirements-monitor.txt"
 permissions:
   contents: write
 concurrency:
