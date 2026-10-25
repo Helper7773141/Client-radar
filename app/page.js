@@ -30,7 +30,7 @@ function Card({item,saved,toggle}){
    <div className="card-top"><div className="tags"><span className={"tag tag-"+item.category}>{labels[item.category]||"Публикация"}</span><span className="tag-topic">{item.topic}</span>{item.priority==="high"&&<span className="tag-hot">● Важно</span>}</div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} title="Сохранить публикацию" aria-label="Сохранить публикацию">☆</button></div>
    <h3><a target="_blank" rel="noopener noreferrer" href={item.url}>{item.title}</a></h3>
    <p className="excerpt">{item.excerpt||"Анонс отсутствует. Переверните карточку — здесь появится конспект полного текста публикации."}</p>
-   <div className="facts"><div><span>ОПУБЛИКОВАНО</span><strong>{fmt(item.publishedAt)}</strong></div><div><span>{item.category==="projects"?"СТАТУС":"ВСТУПАЕТ В СИЛУ"}</span><strong>{item.category==="projects"?"Проект · ещё не действует":item.effectiveAt?fmt(item.effectiveAt):"Уточнить в документе"}</strong></div></div>
+   <div className="facts"><div><span>ОПУБЛИКОВАНО</span><strong>{fmt(item.publishedAt)}</strong></div><div><span>{item.category==="projects"?"СТАТУС":item.category==="acts"?"НАЧАЛО ДЕЙСТВИЯ":"ТИП МАТЕРИАЛА"}</span><strong>{item.category==="projects"?"Проект · ещё не действует":item.category==="acts"?(item.effectiveAt?fmt(item.effectiveAt):"Не указана в анонсе"):(labels[item.category]||"Публикация")}</strong></div></div>
    <div className="card-foot"><span>↗ {item.sourceName}</span><a href={item.url} target="_blank" rel="noopener noreferrer">Читать оригинал ↗</a></div>
    <button className="flip-button" onClick={turn}><span>↻</span> Перевернуть — краткий конспект</button>
   </div>
