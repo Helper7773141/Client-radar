@@ -8,6 +8,10 @@ on:
     paths:
       - "scripts/smoke_site.py"
       - ".github/workflows/ux-smoke.yml"
+      - "app/page.js"
+      - "app/globals.css"
+      - "app/api/**"
+      - "lib/cbr.js"
 permissions:
   contents: read
 jobs:
