@@ -1,0 +1,37 @@
+name: Bank of Russia — background refresh
+on:
+  schedule:
+    - cron: "2/5 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: cbr-feed-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Checkout monitoring data branch
+        uses: actions/checkout@v4
+        with:
+          ref: cbr-feed-data
+          persist-credentials: true
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read official RSS and update summaries
+        run: python scripts/sync_cbr.py
+      - name: Persist the archive without redeploying the website
+        run: |
+          git config user.name "New Project monitoring bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/feed.json
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Data: refresh CBR monitoring archive"
+            git push origin HEAD:cbr-feed-data
+          fi
