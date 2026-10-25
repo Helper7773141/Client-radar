@@ -21,6 +21,9 @@ def check(browser,label,viewport,device_scale=1):
         count=cards.count()
         assert count>=1,"No publication cards"
         card=cards.first
+        first_y=card.bounding_box()["y"]
+        if label=="mobile":
+            assert first_y<1320,f"Mobile first publication too far below the fold: {first_y}px"
         title=card.locator("h3").inner_text()
         summary=card.locator(".digest-summary").inner_text()
         assert summary.strip(),"No preview on first card"
@@ -31,7 +34,7 @@ def check(browser,label,viewport,device_scale=1):
         page.locator(".digest-details").first.wait_for(timeout=15000)
         assert not errors,"Browser errors: "+" | ".join(errors[:3])
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 3"),"Horizontal overflow"
-        print(json.dumps({"screen":label,"cards":count,"firstTitle":title[:100],"hasSummary":len(summary)>90,"source":link},ensure_ascii=False))
+        print(json.dumps({"screen":label,"cards":count,"firstTitle":title[:100],"hasSummary":len(summary)>90,"firstCardY":round(first_y),"source":link},ensure_ascii=False))
     finally:
         page.screenshot(path=str(ART/f"{label}.png"),full_page=True,timeout=30000)
         page.close()
