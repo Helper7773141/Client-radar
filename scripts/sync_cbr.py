@@ -141,6 +141,22 @@ def parse_index(source):
     d="%s-%s-%sT00:00:00Z"%(match.group(3),match.group(2),match.group(1)) if match else None
     emit(title,href,d)
   else:
+   # The projects register often uses ordinary div text rather than semantic headings.
+   # Anchor text and the nearest preceding project description are both checked.
+   for a in soup.select("a[href]"):
+    href=urljoin(url,a.get("href",""))
+    if not re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/UniDbQuery/File/",href,re.I):continue
+    anchor_text=a.get_text(" ",strip=True)
+    if re.search(r"пояснительн|сводн|таблиц|замечани|предложени",anchor_text,re.I):continue
+    if not re.search(r"проект|указани|положени|инструкци|документ",anchor_text,re.I):continue
+    prior=a.find_previous(string=re.compile(r"Проект\s+(?:указани|положени|инструкци|нормативн)",re.I))
+    title=str(prior).strip() if prior else ""
+    title=re.sub(r"\s+"," ",title).strip()
+    if len(title)<45 or len(title)>850:
+     container=a.parent.parent if a.parent and a.parent.parent else a.parent
+     title=container.get_text(" ",strip=True) if container else anchor_text
+     title=re.sub(r"\s+"," ",title).strip()[:800]
+    if re.search(r"проект",title,re.I):emit(title,href)
    for h in soup.find_all(["h2","h3","h4","h5"]):
     title=h.get_text(" ",strip=True)
     if not re.match(r"^(Проект\s+(?:указани|положени|инструкци|нормативн)|Проекты\s+нормативн)",title,re.I):continue
@@ -251,7 +267,9 @@ def digest(text,typ,title):
  if typ=="data":
   rows=clean_list(text.split("\n"),1)
   facts=rows[:5]
-  return {"short":"Последние опубликованные значения: "+"; ".join(rows[:3])[:540],"points":facts,"method":"structured-data","sourceFormat":typ}
+  header=rows[0] if len(rows)>2 else ""
+  values=rows[1:5] if len(rows)>2 and not re.search(r"\\d{2}\\.\\d{2}\\.20\\d{2}",header) else rows[:4]
+  return {"short":"Опубликованные значения: "+"; ".join(values[:3])[:540],"points":facts,"method":"structured-data","sourceFormat":typ,"pipelineVersion":3}
  normalized=re.sub(r"\s+"," ",text)
  sentences=re.split(r"(?<=[.!?])\s+(?=[А-ЯЁ«])",normalized)
  ranked=[]
@@ -271,11 +289,18 @@ def digest(text,typ,title):
   paras=clean_list(text.split("\n"),45)
   points=paras[:3]
  if not points:raise ValueError("Text is present but no informative excerpts found")
- return {"short":" ".join(points[:2])[:700],"points":points,"method":"extractive","sourceFormat":typ}
+ return {"short":" ".join(points[:2])[:700],"points":points,"method":"extractive","sourceFormat":typ,"pipelineVersion":3}
 
 def enrich(item):
  try:
   text,typ,source=source_text(item["url"])
+  # Avoid presenting unrelated attachments or an entire journal as a digest of one news item.
+  if typ=="pdf" and re.search(r"вестник банка россии|бюллетень",item["title"],re.I):
+   raise ValueError("A document collection needs per-article analysis")
+  if typ in ("pdf","docx") and item["category"] not in ("acts","projects"):
+   words=[w.lower()[:7] for w in re.findall(r"[А-Яа-яЁё]{7,}",item["title"]) if not re.match(r"(?i)банка|россии|информаци|публикаци|документ|новости",w)]
+   if len(words)>=2 and not any(w in text[:7000].lower() for w in words):
+    raise ValueError("Attachment subject does not match RSS publication title")
   summary=digest(text,typ,item["title"])
   summary.update({"charactersRead":len(text),"processedAt":stamp(),"url":source,"verification":"Extracts from source, not legal advice"})
   item["summary"]=summary
@@ -289,6 +314,9 @@ def run():
  try:prior=json.loads(FILE.read_text(encoding="utf8"))
  except Exception:prior={}
  archive={e["id"]:e for e in prior.get("entries",[]) if e.get("id")}
+ for item in archive.values():
+  if item.get("summary") and item["summary"].get("pipelineVersion")!=3:
+   item.pop("summary",None)
  with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
   results=list(executor.map(parse_rss,FEEDS)) + list(executor.map(parse_index,EXTRA))
  live=[s for s,_ in results]
@@ -309,7 +337,7 @@ def run():
  # Prioritize missing summaries and refresh up to three changing data dashboards.
  candidates=[x for x in entries if x["id"] in current and (not x.get("summary") or x["category"]=="data")]
  other=[x for x in entries if not x.get("summary") and x["id"] not in current]
- todo=(candidates+other)[:18]
+ todo=(candidates+other)[:36]
  with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
   processed=list(executor.map(enrich,todo))
  up={x["id"]:x for x in processed}
