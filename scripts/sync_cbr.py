@@ -25,6 +25,10 @@ FEEDS=[
  ("projects","Проекты актов","https://www.cbr.ru/rss/project","projects"),
 ]
 INDEX_PAGES={"updates":"https://www.cbr.ru/development/RSS/","press":"https://www.cbr.ru/press/","events":"https://www.cbr.ru/news/","acts":"https://www.cbr.ru/analytics/na_vr/","projects":"https://www.cbr.ru/project_na/"}
+EXTRA=[
+ ("acts-index","Реестр опубликованных актов","https://www.cbr.ru/analytics/na_vr/","acts"),
+ ("projects-index","Перечень проектов актов","https://www.cbr.ru/project_na/","projects")
+]
 FILE=Path("data/feed.json")
 UTC=dt.timezone.utc
 MAX_BYTES=7_000_000
@@ -107,6 +111,56 @@ def parse_rss(feed):
   return {"id":sid,"name":name,"page":INDEX_PAGES[sid],"ok":True,"count":len(entries)},entries
  except Exception as e:return {"id":sid,"name":name,"page":INDEX_PAGES[sid],"ok":False,"count":0,"error":str(e)[:180]},[]
 
+def parse_index(source):
+ sid,name,url,kind=source
+ try:
+  data,_,_=fetch(url)
+  soup=BeautifulSoup(data,"html.parser")
+  seen=set();items=[]
+  def emit(title,link,date_hint=None):
+   title=re.sub(r"\s+"," ",title).strip()
+   if len(title)<45 or len(title)>850:return
+   try:safe_url(link)
+   except ValueError:return
+   if link in seen:return
+   seen.add(link)
+   # Date of discovery is not asserted to be the original publication date.
+   entry={"id":link.lower().rstrip("/"),"url":link,"title":title,"excerpt":"",
+     "publishedAt":date_hint,"firstSeenAt":stamp(),"effectiveAt":None,"category":kind,
+     "topic":topic_for(title),"priority":importance(title,kind),
+     "sourceId":sid,"sourceName":name}
+   items.append(entry)
+  if kind=="acts":
+   for anchor in soup.select("a[href]")[:400]:
+    title=anchor.get_text(" ",strip=True)
+    href=urljoin(url,anchor.get("href",""))
+    if not re.search(r"Указани|Положени|Инструкци|нормативн|акт Банка России",title,re.I):continue
+    if not re.search(r"/UniDbQuery/File/|/Content/Document/File/|\.pdf(?:\?|$)",href,re.I):continue
+    context=anchor.parent.parent.get_text(" ",strip=True) if anchor.parent and anchor.parent.parent else ""
+    match=re.search(r"Официально опубликовано\s*(\d{2})\.(\d{2})\.(20\d{2})",context,re.I)
+    d="%s-%s-%sT00:00:00Z"%(match.group(3),match.group(2),match.group(1)) if match else None
+    emit(title,href,d)
+  else:
+   for h in soup.find_all(["h2","h3","h4","h5"]):
+    title=h.get_text(" ",strip=True)
+    if not re.match(r"^(Проект\s+(?:указани|положени|инструкци|нормативн)|Проекты\s+нормативн)",title,re.I):continue
+    anchor=None
+    container=h.parent
+    for nearby in (container,container.parent if container else None):
+     if nearby is None:continue
+     links=nearby.find_all("a",href=True,limit=14)
+     choices=[]
+     for a in links:
+      href=urljoin(url,a.get("href",""))
+      if re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/UniDbQuery/File/",href,re.I):
+       choices.append(href)
+     if choices:anchor=choices[0];break
+    if anchor:emit(title,anchor)
+  if not items:raise ValueError("Could not identify any individual documents; index layout may have changed")
+  return {"id":sid,"name":name,"page":url,"ok":True,"count":len(items)},items[:65]
+ except Exception as e:
+  return {"id":sid,"name":name,"page":url,"ok":False,"count":0,"error":str(e)[:160]},[]
+
 def clean_list(items,minlen=28):
  out=[];seen=set()
  for x in items:
@@ -180,7 +234,7 @@ def docx_content(data):
 def source_text(url):
  b,kind,final=fetch(url)
  if "pdf" in kind or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
- if "wordprocessingml" in kind or b.startswith(b"PK\\x03\\x04") or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+ if "wordprocessingml" in kind or b.startswith(bytes([80,75,3,4])) or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if not ("html" in kind or "text/" in kind or not kind):raise ValueError("Unsupported content type "+kind[:65])
  info=html_content(b.decode("utf-8","replace"),final)
  text,typ=info["text"],info["kind"]
@@ -188,7 +242,7 @@ def source_text(url):
   attachment=info["attachment"]
   b,k,final=fetch(attachment)
   if "pdf" in k or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
-  if "wordprocessingml" in k or b.startswith(b"PK\\x03\\x04") or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+  if "wordprocessingml" in k or b.startswith(bytes([80,75,3,4])) or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if len(text)<100:raise ValueError("No usable content in HTML/table or attachment")
  return text,typ,final
 
@@ -236,7 +290,7 @@ def run():
  except Exception:prior={}
  archive={e["id"]:e for e in prior.get("entries",[]) if e.get("id")}
  with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-  results=list(executor.map(parse_rss,FEEDS))
+  results=list(executor.map(parse_rss,FEEDS)) + list(executor.map(parse_index,EXTRA))
  live=[s for s,_ in results]
  current={}
  for state,items in results:
@@ -248,10 +302,10 @@ def run():
    prev=archive[id]
    # A data page reuses its URL; refresh published rows even when link is unchanged.
    if prev.get("summary") and item["category"]!="data":item["summary"]=prev["summary"]
-   archive[id]={**prev,**item}
+   archive[id]={**prev,**item,"firstSeenAt":prev.get("firstSeenAt") or item.get("firstSeenAt")}
   else:archive[id]=item
  # Freshest first, preserving previous material during RSS expiry
- entries=sorted(archive.values(),key=lambda x:x.get("publishedAt") or "",reverse=True)[:1200]
+ entries=sorted(archive.values(),key=lambda x:x.get("publishedAt") or x.get("firstSeenAt") or "",reverse=True)[:1200]
  # Prioritize missing summaries and refresh up to three changing data dashboards.
  candidates=[x for x in entries if x["id"] in current and (not x.get("summary") or x["category"]=="data")]
  other=[x for x in entries if not x.get("summary") and x["id"] not in current]
