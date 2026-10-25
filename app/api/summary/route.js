@@ -87,7 +87,7 @@ function extract(html,url){
  if(mainText.length>=130)return {text:mainText,method:"extractive",points:[]};
  const attachments=$("a[href]").map((_,el)=>{
    let href=$(el).attr("href")||"";
-   return /\.pdf(\?|$)|\.docx(\?|$)|\/UniDbQuery\/File\//i.test(href)?href:"";
+   return /\.pdf(\?|$)|\.docx(\?|$)|\/(?:UniDbQuery|XsltBlock)\/File\//i.test(href)?href:"";
  }).get().filter(Boolean);
  return {text:mainText,method:"extractive",points:[],attachment:attachments[0]||null}
 }
