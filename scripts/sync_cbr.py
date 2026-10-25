@@ -268,7 +268,7 @@ def digest(text,typ,title):
   rows=clean_list(text.split("\n"),1)
   facts=rows[:5]
   header=rows[0] if len(rows)>2 else ""
-  values=rows[1:5] if len(rows)>2 and not re.search(r"\\d{2}\\.\\d{2}\\.20\\d{2}",header) else rows[:4]
+  values=rows[1:5] if len(rows)>2 and not re.search(r"\d{2}\.\d{2}\.20\d{2}",header) else rows[:4]
   return {"short":"Опубликованные значения: "+"; ".join(values[:3])[:540],"points":facts,"method":"structured-data","sourceFormat":typ,"pipelineVersion":3}
  normalized=re.sub(r"\s+"," ",text)
  sentences=re.split(r"(?<=[.!?])\s+(?=[А-ЯЁ«])",normalized)
