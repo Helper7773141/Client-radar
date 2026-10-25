@@ -5,6 +5,7 @@ import datetime as dt
 import email.utils
 import hashlib
 import io
+import zipfile
 import json
 import re
 import time
@@ -247,10 +248,45 @@ def docx_content(data):
   lines.extend(" · ".join(c.text.strip() for c in row.cells) for row in table.rows[:8])
  return "\n".join(lines)[:42000]
 
+def xlsx_content(data):
+    """Read a small preview of a spreadsheet without executing formulas/macros."""
+    ns={"x":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        files=set(z.namelist())
+        if "xl/workbook.xml" not in files:raise ValueError("Not an XLSX workbook")
+        shared=[]
+        if "xl/sharedStrings.xml" in files:
+            root=ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall(".//x:si",ns):
+                shared.append("".join(n.text or "" for n in si.findall(".//x:t",ns)))
+        sheets=sorted(n for n in files if re.fullmatch(r"xl/worksheets/sheet\d+\.xml",n))
+        if not sheets:raise ValueError("No worksheets in XLSX")
+        lines=[]
+        for filename in sheets[:2]:
+            root=ET.fromstring(z.read(filename))
+            for row in root.findall(".//x:sheetData/x:row",ns)[:18]:
+                values=[]
+                for cell in row.findall("x:c",ns)[:11]:
+                    v=cell.find("x:v",ns)
+                    inline=cell.find("x:is",ns)
+                    value=(v.text or "") if v is not None else ("".join(x.text or "" for x in inline.findall(".//x:t",ns)) if inline is not None else "")
+                    if cell.attrib.get("t")=="s" and value.isdigit():
+                        i=int(value)
+                        if i<len(shared):value=shared[i]
+                    if value.strip():values.append(value.strip())
+                if values:lines.append(" · ".join(values)[:400])
+            if len(lines)>22:break
+        if not lines:raise ValueError("XLSX has no readable cell values")
+        return "\n".join(lines)[:9000]
+
 def source_text(url):
  b,kind,final=fetch(url)
  if "pdf" in kind or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
- if "wordprocessingml" in kind or b.startswith(bytes([80,75,3,4])) or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+ if ("spreadsheetml" in kind or urlparse(final).path.lower().endswith(".xlsx")):return xlsx_content(b),"data",final
+ if b.startswith(bytes([80,75,3,4])):
+  with zipfile.ZipFile(io.BytesIO(b)) as z:has_workbook="xl/workbook.xml" in z.namelist()
+  if has_workbook:return xlsx_content(b),"data",final
+ if "wordprocessingml" in kind or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if not ("html" in kind or "text/" in kind or not kind):raise ValueError("Unsupported content type "+kind[:65])
  info=html_content(b.decode("utf-8","replace"),final)
  text,typ=info["text"],info["kind"]
@@ -258,7 +294,11 @@ def source_text(url):
   attachment=info["attachment"]
   b,k,final=fetch(attachment)
   if "pdf" in k or b.startswith(b"%PDF") or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
-  if "wordprocessingml" in k or b.startswith(bytes([80,75,3,4])) or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+  if "spreadsheetml" in k or urlparse(final).path.lower().endswith(".xlsx"):return xlsx_content(b),"data",final
+  if b.startswith(bytes([80,75,3,4])):
+   with zipfile.ZipFile(io.BytesIO(b)) as z:has_workbook="xl/workbook.xml" in z.namelist()
+   if has_workbook:return xlsx_content(b),"data",final
+  if "wordprocessingml" in k or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
  if len(text)<100:raise ValueError("No usable content in HTML/table or attachment")
  return text,typ,final
 
