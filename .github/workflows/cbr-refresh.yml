@@ -3,6 +3,12 @@ on:
   schedule:
     - cron: "2/5 * * * *"
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/sync_cbr.py"
+      - ".github/workflows/cbr-refresh.yml"
+      - "requirements-monitor.txt"
 permissions:
   contents: write
 concurrency:
@@ -11,27 +17,44 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
     steps:
-      - name: Checkout monitoring data branch
+      - name: Checkout latest application and crawler code
         uses: actions/checkout@v4
         with:
-          ref: cbr-feed-data
+          ref: main
           persist-credentials: true
+          fetch-depth: 0
+      - name: Load previous snapshot from data branch
+        run: |
+          git fetch origin cbr-feed-data
+          mkdir -p data
+          git show origin/cbr-feed-data:data/feed.json > data/feed.json
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Read official RSS and update summaries
+          cache: pip
+          cache-dependency-path: requirements-monitor.txt
+      - name: Install document parsers
+        run: pip install -r requirements-monitor.txt
+      - name: Run offline regression tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Read official sources and summarize documents
         run: python scripts/sync_cbr.py
-      - name: Persist the archive without redeploying the website
+      - name: Save snapshot without redeploy
         run: |
+          cp data/feed.json /tmp/cbr-feed-new.json
+          rm -f data/feed.json
+          git checkout -B cbr-feed-data origin/cbr-feed-data
+          mkdir -p data
+          cp /tmp/cbr-feed-new.json data/feed.json
           git config user.name "New Project monitoring bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/feed.json
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "Archive unchanged"
           else
-            git commit -m "Data: refresh CBR monitoring archive"
-            git push origin HEAD:cbr-feed-data
+            git commit -m "Data: update CBR snapshot"
+            git push origin cbr-feed-data
           fi

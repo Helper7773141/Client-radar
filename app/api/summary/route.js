@@ -4,59 +4,92 @@ export const dynamic="force-dynamic";
 export const maxDuration=30;
 
 const cache=new Map();
-const BLOCKED=new Set(["/"]);
+
 function allowed(input){
   const url=new URL(input);
   if(url.protocol!=="https:"||!["cbr.ru","www.cbr.ru"].includes(url.hostname.toLowerCase())||url.username||url.password)throw Error("Разрешены только официальные страницы Банка России");
   return url;
 }
 async function download(input){
-  let url=allowed(input);
-  for(let attempt=0;attempt<4;attempt++){
-    const r=await fetch(url.toString(),{redirect:"manual",cache:"no-store",headers:{"User-Agent":"Mozilla/5.0 (compatible; NewProjectRegulatoryReader/1.1)","Accept":"text/html,application/xhtml+xml,application/pdf;q=0.5"},signal:AbortSignal.timeout(11500)});
-    if([301,302,303,307,308].includes(r.status)){
-      const loc=r.headers.get("location");if(!loc)throw Error("Источник прислал некорректную переадресацию");
-      url=allowed(new URL(loc,url).toString());continue;
-    }
-    if(!r.ok)throw Error("Сайт Банка России ответил HTTP "+r.status);
-    const type=r.headers.get("content-type")||"";
-    if(type.includes("pdf")||url.pathname.toLowerCase().endsWith(".pdf"))throw Error("Это PDF. Текст PDF пока не извлекается автоматически");
-    if(!type.includes("html")&&!type.includes("text/"))throw Error("Тип документа пока не поддерживается");
-    const len=Number(r.headers.get("content-length")||0);
-    if(len>3500000)throw Error("Документ слишком большой для быстрой обработки");
-    const html=(await r.text()).slice(0,3000000);
-    return {html,url:url.toString()};
+ let url=allowed(input);
+ for(let attempt=0;attempt<4;attempt++){
+  const r=await fetch(url.toString(),{redirect:"manual",cache:"no-store",headers:{"User-Agent":"Mozilla/5.0 (compatible; NewProjectRegulatoryReader/2.0)","Accept":"text/html,application/xhtml+xml,application/pdf,application/octet-stream,*/*"},signal:AbortSignal.timeout(13500)});
+  if([301,302,303,307,308].includes(r.status)){
+   const loc=r.headers.get("location");
+   if(!loc)throw Error("Некорректная переадресация");
+   url=allowed(new URL(loc,url).toString());continue;
   }
-  throw Error("Слишком много переадресаций");
+  if(!r.ok)throw Error("Банк России ответил HTTP "+r.status);
+  const type=(r.headers.get("content-type")||"").toLowerCase();
+  const size=Number(r.headers.get("content-length")||0);
+  if(size>7000000)throw Error("Документ слишком большой для быстрого анализа");
+  const buf=Buffer.from(await r.arrayBuffer());
+  if(buf.length>7000000)throw Error("Документ превышает допустимый размер");
+  const path=url.pathname.toLowerCase();
+  const isPdf=buf.subarray(0,4).toString()==="%PDF"||type.includes("pdf")||path.endsWith(".pdf");
+  const isDocx=(buf[0]===80&&buf[1]===75&&buf[2]===3&&buf[3]===4)||(type.includes("wordprocessingml"))||path.endsWith(".docx");
+  if(isPdf)return {format:"pdf",buf,url:url.toString()};
+  if(isDocx)return {format:"docx",buf,url:url.toString()};
+  if(!type.includes("html")&&!type.includes("text/"))throw Error("Формат вложения пока не поддерживается");
+  return {format:"html",html:buf.toString("utf8"),url:url.toString()};
+ }
+ throw Error("Слишком много переадресаций");
 }
-function extract(html){
+async function toText(downloaded){
+ if(downloaded.format==="html")return {info:extract(downloaded.html,downloaded.url),url:downloaded.url};
+ if(downloaded.format==="pdf"){
+  const lib=await import("pdf-parse/lib/pdf-parse.js");
+  const pdf=lib.default||lib;
+  const doc=await pdf(downloaded.buf,{max:24});
+  if(!doc.text||doc.text.trim().length<160)throw Error("PDF содержит изображение или нераспознаваемый текст; требуется ручная проверка оригинала");
+  return {info:{text:doc.text.slice(0,34000),method:"extractive",points:[]},url:downloaded.url};
+ }
+ const lib=await import("mammoth");
+ const mammoth=lib.default||lib;
+ const result=await mammoth.extractRawText({buffer:downloaded.buf});
+ if(!result.value||result.value.trim().length<100)throw Error("Не удалось извлечь текст Word-документа");
+ return {info:{text:result.value.slice(0,34000),method:"extractive",points:[]},url:downloaded.url};
+}
+function extract(html,url){
  const $=load(html);
  $("script,style,noscript,header,footer,nav,aside,form,iframe,svg,.cookie,.cookies,.cookie-popup,.breadcrumbs,.b-breadcrumbs,.share,.social,.footer,.header,.side-menu,.navigation,.b-side-menu").remove();
- const candidates=[".landing-text",".b-article",".b-article__body",".b-page__content",".page-content",".content-block",".b-text","[itemprop='articleBody']", "article", "main", "#content",".content"];
+ const candidates=[".landing-text",".b-article__body",".b-article",".b-page__content",".page-content",".content-block","[itemprop='articleBody']","article","main","#content",".content"];
  let best=[],score=0;
  for(const selector of candidates){
   $(selector).each((_,el)=>{
-   const $el=$(el);
-   const parts=$el.find("p,li,h2,h3").map((__,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>32&&x.length<2000);
-   const clean=parts.filter(x=>!/^(поделиться|материал подготовлен|при использовании материала|ссылки по теме|контактная информация)/i.test(x));
-   const length=clean.join(" ").length;
-   if(length>score){best=clean;score=length}
+   const parts=$(el).find("p,li,h2,h3").map((__,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>32&&x.length<2000);
+   const len=parts.join(" ").length;
+   if(len>score){best=parts;score=len}
   });
  }
- if(score<250){
-   let body=$("body").clone();
-   body.find("nav,header,footer,aside,.menu,.sidebar").remove();
-   const parts=body.find("p").map((_,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>35&&x.length<2000);
-   if(parts.join(" ").length>score)best=parts;
+ if(score<230){
+  const paragraphs=$("body p,body li").map((_,n)=>$(n).text().replace(/\s+/g," ").trim()).get().filter(x=>x.length>35&&x.length<1800);
+  if(paragraphs.join(" ").length>score){best=paragraphs;score=paragraphs.join(" ").length}
  }
- const lines=[];let total=0;
- for(const p of best){
-  const s=p.replace(/\s+/g," ").trim();
-  if(!s||lines.at(-1)===s)continue;
-  lines.push(s);total+=s.length;
-  if(total>33000)break;
+ const lines=[],seen=new Set();
+ for(const para of best){
+  const s=para.replace(/\s+/g," ").trim();
+  if(!s||seen.has(s))continue;
+  lines.push(s);seen.add(s);if(lines.join(" ").length>30000)break
  }
- return lines.join("\n\n");
+ let rows=[];
+ $("table").slice(0,4).each((_,t)=>{
+  $(t).find("tr").slice(0,16).each((__,tr)=>{
+   let cells=$(tr).find("td,th").map((___,td)=>$(td).text().replace(/\s+/g," ").trim()).get().filter(Boolean);
+   if(cells.length>=2&&cells.join(" · ").length<350)rows.push(cells.join(" · "))
+  })
+ });
+ const dataPage=/\/(hd_base|statistics)\//i.test(new URL(url).pathname) || (rows.length>1&&score<250);
+ if(dataPage&&rows.length){
+  return {text:rows.slice(0,11).concat(lines.slice(0,4)).join("\n"),method:"structured-data",points:rows.slice(0,6)}
+ }
+ const mainText=lines.join("\n\n");
+ if(mainText.length>=130)return {text:mainText,method:"extractive",points:[]};
+ const attachments=$("a[href]").map((_,el)=>{
+   let href=$(el).attr("href")||"";
+   return /\.pdf(\?|$)|\.docx(\?|$)|\/UniDbQuery\/File\//i.test(href)?href:"";
+ }).get().filter(Boolean);
+ return {text:mainText,method:"extractive",points:[],attachment:attachments[0]||null}
 }
 function pick(text,title){
  const parts=text.replace(/\n+/g," ").split(/(?<=[.!?])\s+(?=[А-ЯЁ«„])/u).map(x=>x.trim()).filter(x=>x.length>48&&x.length<660).slice(0,105);
@@ -88,12 +121,21 @@ export async function GET(request){
  const key=new URL(input).toString();const old=cache.get(key);
  if(old&&Date.now()-old.ts<30*60*1000)return Response.json(old.value,{"headers":{"Cache-Control":"public, s-maxage=600"}});
  try{
-  const {html,url}=await download(key);
-  const text=extract(html);
-  if(text.length<130)throw Error("Полный текст не удалось извлечь: на странице может быть только ссылка на вложенный документ");
-  const $=load(html);const title=$("h1").first().text().replace(/\s+/g," ").trim().slice(0,500)||$("title").first().text().trim();
-  const summary=await aiSummary(text,title)||pick(text,title);
-  const value={...summary,title,url,charactersRead:text.length,processedAt:new Date().toISOString()};
+  let doc=await download(key);
+  let {info,url}=await toText(doc);
+  if(info.text.length<100&&info.attachment){
+   const attachment=allowed(new URL(info.attachment,url).toString());
+   doc=await download(attachment.toString());
+   ({info,url}=await toText(doc));
+  }
+  const text=info.text;
+  if(text.length<100)throw Error("На странице не найден читаемый текст; попробуйте оригинал или дождитесь фоновой обработки документа.");
+  const $=doc.format==="html"?load(doc.html):null;
+  const title=($?.("h1").first().text().replace(/\s+/g," ").trim().slice(0,500)||$?.("title").first().text().trim()||new URL(key).pathname);
+  const summary=info.method==="structured-data"?{short:"Последние опубликованные показатели: "+info.points.slice(0,3).join("; ").slice(0,570),points:info.points,method:"structured-data"}:await aiSummary(text,title)||pick(text,title);
+  if(!summary.short||summary.short.length<30)throw Error("Недостаточно текста для достоверной выдержки");
+  summary.sourceFormat=doc.format==="html"&&info.method==="structured-data"?"html-table":doc.format;
+  const value={...summary,title,url,charactersRead:text.length,processedAt:new Date().toISOString(),sourceFormat:summary.sourceFormat||doc.format};
   cache.set(key,{ts:Date.now(),value});if(cache.size>300)cache.delete(cache.keys().next().value);
   return Response.json(value,{headers:{"Cache-Control":"public, s-maxage=600, stale-while-revalidate=3600"}});
  }catch(e){return Response.json({error:e.message||"Не удалось прочитать источник"},{status:502,headers:{"Cache-Control":"no-store"}})}
