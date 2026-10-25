@@ -27,13 +27,49 @@ async function download(input){
   if(buf.length>7000000)throw Error("Документ превышает допустимый размер");
   const path=url.pathname.toLowerCase();
   const isPdf=buf.subarray(0,4).toString()==="%PDF"||type.includes("pdf")||path.endsWith(".pdf");
-  const isDocx=(buf[0]===80&&buf[1]===75&&buf[2]===3&&buf[3]===4)||(type.includes("wordprocessingml"))||path.endsWith(".docx");
+  const isZip=(buf[0]===80&&buf[1]===75&&buf[2]===3&&buf[3]===4);
+  const isSpreadsheet=type.includes("spreadsheetml")||path.endsWith(".xlsx");
+  const isDocx=type.includes("wordprocessingml")||path.endsWith(".docx");
   if(isPdf)return {format:"pdf",buf,url:url.toString()};
+  if(isSpreadsheet)return {format:"xlsx",buf,url:url.toString()};
   if(isDocx)return {format:"docx",buf,url:url.toString()};
+  if(isZip)return {format:"zip",buf,url:url.toString()};
   if(!type.includes("html")&&!type.includes("text/"))throw Error("Формат вложения пока не поддерживается");
   return {format:"html",html:buf.toString("utf8"),url:url.toString()};
  }
  throw Error("Слишком много переадресаций");
+}
+async function xlsxSummary(data,files=null){
+ const fflate=(await import("fflate"));
+ const entries=files||fflate.unzipSync(new Uint8Array(data));
+ const decoder=new TextDecoder("utf-8");
+ if(!entries["xl/workbook.xml"])throw Error("Документ не является таблицей XLSX");
+ const shared=[];
+ if(entries["xl/sharedStrings.xml"]){
+  const $strings=load(decoder.decode(entries["xl/sharedStrings.xml"]),{xmlMode:true});
+  $strings("si").each((_,el)=>{
+   const tokens=$strings(el).find("t").map((__,t)=>$strings(t).text()).get();
+   shared.push(tokens.join(""));
+  })
+ }
+ const filenames=Object.keys(entries).filter(x=>/^xl\/worksheets\/sheet\d+\.xml$/.test(x)).sort().slice(0,2);
+ let lines=[];
+ for(const filename of filenames){
+  const $=load(decoder.decode(entries[filename]),{xmlMode:true});
+  $("sheetData row").slice(0,18).each((_,row)=>{
+   let cells=[];
+   $(row).find("c").slice(0,12).each((__,cell)=>{
+    const typ=$(cell).attr("t");
+    let val=$(cell).find("v").first().text().trim();
+    if(typ==="s")val=shared[Number(val)]||val;
+    if(typ==="inlineStr")val=$(cell).find("is t").text().trim();
+    if(val)cells.push(val.slice(0,100));
+   });
+   if(cells.length)lines.push(cells.join(" · ").slice(0,330));
+  })
+ }
+ if(lines.length<2)throw Error("В Excel-файле нет доступных для чтения значений");
+ return {text:lines.slice(0,24).join("\n"),method:"structured-data",points:lines.slice(0,7)}
 }
 async function toText(downloaded){
  if(downloaded.format==="html")return {info:extract(downloaded.html,downloaded.url),url:downloaded.url};
@@ -43,6 +79,12 @@ async function toText(downloaded){
   const doc=await pdf(downloaded.buf,{max:24});
   if(!doc.text||doc.text.trim().length<160)throw Error("PDF содержит изображение или нераспознаваемый текст; требуется ручная проверка оригинала");
   return {info:{text:doc.text.slice(0,34000),method:"extractive",points:[]},url:downloaded.url};
+ }
+ if(downloaded.format==="xlsx"||downloaded.format==="zip"){
+  const fflate=await import("fflate");
+  const files=fflate.unzipSync(new Uint8Array(downloaded.buf));
+  if(files["xl/workbook.xml"])return {info:await xlsxSummary(downloaded.buf,files),url:downloaded.url,format:"xlsx"};
+  if(!files["word/document.xml"])throw Error("Неизвестный формат вложения");
  }
  const lib=await import("mammoth");
  const mammoth=lib.default||lib;
@@ -134,7 +176,7 @@ export async function GET(request){
   const title=($?.("h1").first().text().replace(/\s+/g," ").trim().slice(0,500)||$?.("title").first().text().trim()||new URL(key).pathname);
   const summary=info.method==="structured-data"?{short:"Последние опубликованные показатели: "+info.points.slice(0,3).join("; ").slice(0,570),points:info.points,method:"structured-data"}:await aiSummary(text,title)||pick(text,title);
   if(!summary.short||summary.short.length<30)throw Error("Недостаточно текста для достоверной выдержки");
-  summary.sourceFormat=doc.format==="html"&&info.method==="structured-data"?"html-table":doc.format;
+  summary.sourceFormat=doc.format==="html"&&info.method==="structured-data"?"html-table":info.method==="structured-data"?"xlsx":doc.format;
   const value={...summary,title,url,charactersRead:text.length,processedAt:new Date().toISOString(),sourceFormat:summary.sourceFormat||doc.format};
   cache.set(key,{ts:Date.now(),value});if(cache.size>300)cache.delete(cache.keys().next().value);
   return Response.json(value,{headers:{"Cache-Control":"public, s-maxage=600, stale-while-revalidate=3600"}});
