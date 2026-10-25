@@ -135,7 +135,7 @@ def parse_index(source):
     title=anchor.get_text(" ",strip=True)
     href=urljoin(url,anchor.get("href",""))
     if not re.search(r"Указани|Положени|Инструкци|нормативн|акт Банка России",title,re.I):continue
-    if not re.search(r"/UniDbQuery/File/|/Content/Document/File/|\.pdf(?:\?|$)",href,re.I):continue
+    if not re.search(r"/UniDbQuery/File/|/XsltBlock/File/|/Content/Document/File/|/Queries/XsltBlock/File/|\.pdf(?:\?|$)",href,re.I):continue
     context=anchor.parent.parent.get_text(" ",strip=True) if anchor.parent and anchor.parent.parent else ""
     match=re.search(r"Официально опубликовано\s*(\d{2})\.(\d{2})\.(20\d{2})",context,re.I)
     d="%s-%s-%sT00:00:00Z"%(match.group(3),match.group(2),match.group(1)) if match else None
@@ -145,7 +145,7 @@ def parse_index(source):
    # Anchor text and the nearest preceding project description are both checked.
    for a in soup.select("a[href]"):
     href=urljoin(url,a.get("href",""))
-    if not re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/UniDbQuery/File/",href,re.I):continue
+    if not re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/Queries/XsltBlock/File/|/UniDbQuery/File/|/XsltBlock/File/",href,re.I):continue
     anchor_text=a.get_text(" ",strip=True)
     if re.search(r"пояснительн|сводн|таблиц|замечани|предложени",anchor_text,re.I):continue
     if not re.search(r"проект|указани|положени|инструкци|документ",anchor_text,re.I):continue
@@ -168,7 +168,7 @@ def parse_index(source):
      choices=[]
      for a in links:
       href=urljoin(url,a.get("href",""))
-      if re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/UniDbQuery/File/",href,re.I):
+      if re.search(r"\.pdf(?:\?|$)|\.docx(?:\?|$)|/Content/Document/File/|/Queries/XsltBlock/File/|/UniDbQuery/File/|/XsltBlock/File/",href,re.I):
        choices.append(href)
      if choices:anchor=choices[0];break
     if anchor:emit(title,anchor)
