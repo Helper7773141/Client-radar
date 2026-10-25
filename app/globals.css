@@ -15,7 +15,7 @@
 .digest-card .card-top{align-items:center}
 .digest-card .digest-date{font-size:11px;color:#8b998f;margin-top:18px}
 .digest-card .digest-date span{margin:0 5px;color:#bdc7c0}
-.digest-card h3{font-size:19px;line-height:1.4;letter-spacing:-.3px;margin:11px 0 12px;overflow-wrap:anywhere}
+.digest-card h3{font-size:19px;line-height:1.4;letter-spacing:-.3px;margin:11px 0 12px;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
 .digest-summary{font-size:13px;line-height:1.75;color:#44594b;margin:0 0 12px;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;flex:1;white-space:normal}
 .digest-pending{color:#829187}
 .digest-method{font-size:11px;color:#3e815b;font-weight:700;margin:1px 0 14px;line-height:1.5}
