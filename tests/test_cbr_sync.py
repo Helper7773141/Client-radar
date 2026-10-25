@@ -32,9 +32,9 @@ class CbrCrawlerTests(unittest.TestCase):
         self.assertIn("22.10.2026",digest["short"])
 
     def test_rss_parse_and_category(self):
-        example=b"""<rss><channel><item><title>Вмененная ставка валютного свопа овернайт в юанях</title>
+        example="""<rss><channel><item><title>Вмененная ставка валютного свопа овернайт в юанях</title>
         <link>https://www.cbr.ru/hd_base/ImpliedRateCNY/</link>
-        <pubDate>Fri, 23 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>"""
+        <pubDate>Fri, 23 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>""".encode("utf8")
         with patch.object(crawler,"fetch",return_value=(example,"application/rss+xml","https://www.cbr.ru/rss/RssNews")):
             state,items=crawler.parse_rss(crawler.FEEDS[0])
         self.assertTrue(state["ok"])
