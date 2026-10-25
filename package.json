@@ -14,6 +14,7 @@
     "react-dom": "latest",
     "cheerio": "^1.0.0",
     "pdf-parse": "1.1.1",
-    "mammoth": "^1.11.0"
+    "mammoth": "^1.11.0",
+    "fflate": "^0.8.2"
   }
 }
