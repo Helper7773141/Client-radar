@@ -1,181 +1,275 @@
 #!/usr/bin/env python3
-"""Capture official Bank of Russia RSS publications every five minutes.
-A separate data branch acts as a lightweight persistent archive; no web request required.
-The RSS sources are NOT claimed to cover every document on cbr.ru.
-"""
+"""Incremental, source-attributed Bank of Russia digest. RSS coverage is not comprehensive."""
 import concurrent.futures
 import datetime as dt
 import email.utils
-import html
-from html.parser import HTMLParser
+import hashlib
+import io
 import json
-import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-SOURCES=[
-    ("updates","Новое на сайте","https://www.cbr.ru/rss/RssNews","news"),
-    ("press","Пресс-релизы","https://www.cbr.ru/rss/RssPress","press"),
-    ("events","Новости и выступления","https://www.cbr.ru/rss/eventrss","events"),
-    ("acts","Нормативные акты","https://www.cbr.ru/rss/navr","acts"),
-    ("projects","Проекты актов","https://www.cbr.ru/rss/project","projects"),
+from bs4 import BeautifulSoup
+import fitz
+from docx import Document
+
+FEEDS=[
+ ("updates","Новое на сайте","https://www.cbr.ru/rss/RssNews","news"),
+ ("press","Пресс-релизы","https://www.cbr.ru/rss/RssPress","press"),
+ ("events","Новости и выступления","https://www.cbr.ru/rss/eventrss","events"),
+ ("acts","Нормативные акты","https://www.cbr.ru/rss/navr","acts"),
+ ("projects","Проекты актов","https://www.cbr.ru/rss/project","projects"),
 ]
 FILE=Path("data/feed.json")
 UTC=dt.timezone.utc
+MAX_BYTES=7_000_000
+HEADERS={"User-Agent":"Mozilla/5.0 (compatible; NewProjectPublicMonitoring/2.0)","Accept":"text/html,application/pdf,application/xml,text/xml,*/*"}
 
-def now():
-    return dt.datetime.now(UTC).isoformat().replace("+00:00","Z")
+def stamp():return dt.datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00","Z")
 
-def get(url,limit=2200000):
-    p=urlparse(url)
-    if p.scheme!="https" or p.hostname not in ("www.cbr.ru","cbr.ru"):
-        raise ValueError("Unsafe or unsupported source URL")
-    req=Request(url,headers={"User-Agent":"Mozilla/5.0 (compatible; NewProjectCbrDigest/1.2)","Accept":"application/rss+xml,application/xml,text/html,text/xml,*/ *"})
-    with urlopen(req,timeout=12) as resp:
-        if urlparse(resp.url).hostname not in ("www.cbr.ru","cbr.ru"):
-            raise ValueError("Redirect outside cbr.ru")
-        if int(resp.headers.get("Content-Length","0"))>limit:
-            raise ValueError("Document too large")
-        data=resp.read(limit+1)
-        if len(data)>limit: raise ValueError("Document exceeds size limit")
-        return data, resp.headers.get("Content-Type","")
+def safe_url(url):
+ p=urlparse(url)
+ if p.scheme!="https" or (p.hostname or "").lower() not in ("cbr.ru","www.cbr.ru") or p.username or p.password:raise ValueError("Domain not allowed")
+ return url
 
-def tidy(x):
-    x=re.sub(r"<[^>]*>"," ",x or "")
-    return re.sub(r"\s+"," ",html.unescape(x)).strip()
+def fetch(url):
+ safe_url(url)
+ req=Request(url,headers=HEADERS)
+ with urlopen(req,timeout=14) as r:
+  safe_url(r.url)
+  size=int(r.headers.get("Content-Length") or 0)
+  if size>MAX_BYTES:raise ValueError("Oversized source")
+  b=r.read(MAX_BYTES+1)
+  if len(b)>MAX_BYTES:raise ValueError("Oversized response")
+  return b,(r.headers.get("Content-Type") or "").lower(),r.url
 
-def date(s):
-    if not s:return None
-    try:
-        d=email.utils.parsedate_to_datetime(s)
-        if d.tzinfo is None:d=d.replace(tzinfo=UTC)
-        return d.astimezone(UTC).isoformat().replace("+00:00","Z")
-    except Exception:return None
+def plain(x):return re.sub(r"\s+"," ",BeautifulSoup(x or "","html.parser").get_text(" ",strip=True)).strip()
 
-def category(t,u,default):
-    lower=u.lower()
-    if "/project_na/" in lower:return "projects"
-    if "/na_vr/" in lower:return "acts"
-    return default
+def parse_time(text):
+ if not text:return None
+ try:
+  d=email.utils.parsedate_to_datetime(text)
+  if d.tzinfo is None:d=d.replace(tzinfo=UTC)
+  return d.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00","Z")
+ except Exception:return None
 
-def topic(t):
-    if re.search(r"ключев.*ставк|инфляци|денежно.кредит",t,re.I):return "Ставка и экономика"
-    if re.search(r"115.фз|противодейств|мошеннич|идентификаци|финмонитор",t,re.I):return "Комплаенс"
-    if re.search(r"цифров.*рубл|цифров.*валют",t,re.I):return "Цифровые финансы"
-    if re.search(r"капитал|ликвидност|банковск|кредитн|отч[её]тност",t,re.I):return "Банковский сектор"
-    if re.search(r"страхов|пенсионн|инвестор|бирж|брокер",t,re.I):return "Финансовые рынки"
-    return "Общее"
+def kind_for(url,default):
+ url=url.lower()
+ if "/project_na/" in url:return "projects"
+ if "/na_vr/" in url:return "acts"
+ if "/hd_base/" in url or "/statistics/" in url:return "data"
+ return default
 
-def parse_source(row):
-    source_id, name, endpoint, kind=row
-    try:
-        b,_=get(endpoint)
-        root=ET.fromstring(b)
-        entries=[]
-        for node in root.findall(".//item")[:100]:
-            def field(s):
-                el=node.find(s)
-                return "".join(el.itertext()).strip() if el is not None else ""
-            title=tidy(field("title"))
-            link=field("link") or field("guid")
-            link=urljoin("https://www.cbr.ru/",link)
-            u=urlparse(link)
-            if not title or u.scheme!="https" or u.hostname not in ("www.cbr.ru","cbr.ru"):continue
-            link=link.split("#",1)[0]
-            k=category(title,link,kind)
-            description=tidy(field("description"))
-            entries.append({"id":link.lower().rstrip("/"),"url":link,"title":title,"excerpt":description[:350],"publishedAt":date(field("pubDate")),"effectiveAt":None,"category":k,"topic":topic(title),"priority":"high" if re.search(r"ключев.*ставк|вступа[ею]т в силу|обязательн|лицензи|антифрод",title,re.I) else "medium" if k in ("acts","projects") else "normal","sourceId":source_id,"sourceName":name})
-        return {"id":source_id,"name":name,"ok":True,"count":len(entries)}, entries
-    except Exception as e:
-        return {"id":source_id,"name":name,"ok":False,"count":0,"error":str(e)[:190]},[]
+def topic_for(x):
+ x=x.lower()
+ for words,label in [
+  (("ключев","инфляц","денежно-кредит"),"Денежно-кредитная политика"),
+  (("платежн","расчет","перевод","цифрового рубл"),"Платежи"),
+  (("отмыван","противодейств","финмонитор","идентификац","115-фз"),"Комплаенс"),
+  (("кредитн","банковск","ликвидност","капитал","резерв","отчетност"),"Банковский сектор"),
+  (("страхов","пенсионн","брокер","инвест","бирж"),"Финансовые рынки"),
+  (("валют","своп","ruonia","наличн","статистик"),"Рыночные данные"),
+ ]:
+  if any(w in x for w in words):return label
+ return "Общее"
 
-class Paragraphs(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.tag=None;self.level=0;self.hidden=0;self.chunks=[];self.lines=[]
-    def handle_starttag(self,tag,attrs):
-        if tag in ("script","style","noscript","nav","header","footer","aside"):self.hidden+=1
-        if self.hidden:return
-        if tag in ("p","li","h2","h3") and self.level==0:self.tag=tag;self.level=1;self.chunks=[]
-        elif self.level:self.level+=1
-    def handle_data(self,data):
-        if self.level and not self.hidden:self.chunks.append(data)
-    def handle_endtag(self,tag):
-        if tag in ("script","style","noscript","nav","header","footer","aside") and self.hidden:self.hidden-=1
-        if self.hidden:return
-        if self.level:
-            self.level-=1
-            if self.level==0:
-                text=re.sub(r"\s+"," ","".join(self.chunks)).strip()
-                if 45<len(text)<1700:self.lines.append(text)
-                self.tag=None;self.chunks=[]
+def importance(title,category):
+ if re.search(r"ключев.{0,12}ставк|совет директоров|обязательн|вступ.{0,15}силу|норматив|лицензи|санкци",title,re.I):return "high"
+ if category in ("acts","projects"):return "medium"
+ return "normal"
 
-def summarize(text):
-    sentences=re.split(r"(?<=[.!?])\s+(?=[А-ЯЁ«])",text.replace("\n"," "))
-    terms=["принял решение","ключев","процент","требован","вступ","изменен","изменени","составит","банков","норматив","повышен","снижен","сохран","предлага","закон","срок"]
-    options=[]
-    for n,s in enumerate(sentences[:140]):
-        s=s.strip()
-        if not 45<len(s)<640:continue
-        score=(max(0,5-n) if n<5 else 0)+sum(1.2 for term in terms if term in s.lower())
-        score+=min(2,len(re.findall(r"\d+[.,]?\d*\s*(?:%|руб|млрд|год|процент)",s))*1.5)
-        options.append((score,n,s))
-    options=sorted(sorted(options,reverse=True)[:4],key=lambda x:x[1])
-    points=list(dict.fromkeys(v[2] for v in options))
-    return {"short":" ".join(points[:2])[:700],"points":points,"method":"extractive"}
+def parse_rss(feed):
+ sid,name,url,category=feed
+ try:
+  b,_,_=fetch(url)
+  root=ET.fromstring(b)
+  entries=[]
+  for item in root.findall(".//item")[:120]:
+   def field(n):
+    v=item.find(n)
+    return "".join(v.itertext()).strip() if v is not None else ""
+   title=plain(field("title"))
+   link=urljoin("https://www.cbr.ru",field("link") or field("guid"))
+   try:safe_url(link)
+   except ValueError:continue
+   link=link.split("#",1)[0]
+   if not title:continue
+   c=kind_for(link,category)
+   desc=plain(field("description"))
+   entries.append({"id":link.lower().rstrip("/"),"url":link,"title":title,"excerpt":desc[:400],
+    "publishedAt":parse_time(field("pubDate")),"effectiveAt":None,"category":c,
+    "topic":topic_for(title),"priority":importance(title,c),"sourceId":sid,"sourceName":name})
+  return {"id":sid,"name":name,"ok":True,"count":len(entries)},entries
+ except Exception as e:return {"id":sid,"name":name,"ok":False,"count":0,"error":str(e)[:180]},[]
 
-def read_article(item):
-    u=item["url"]
-    if urlparse(u).path.lower().endswith(".pdf"):return item
-    try:
-        content,kind=get(u)
-        if "pdf" in kind.lower():return item
-        parser=Paragraphs()
-        parser.feed(content.decode("utf-8","ignore"))
-        text="\n".join(parser.lines)[:35000]
-        if len(text)<180:return item
-        result=summarize(text)
-        if len(result["short"])<70:return item
-        item={**item,"summary":{**result,"charactersRead":len(text),"processedAt":now(),"url":u}}
-    except Exception as e:
-        # Don't mark permanently; failed items will be retried in later runs.
-        print("Article read failed:",u,str(e)[:90])
-    return item
+def clean_list(items,minlen=28):
+ out=[];seen=set()
+ for x in items:
+  x=re.sub(r"\s+"," ",x).strip()
+  if len(x)<minlen or len(x)>2300 or x in seen:continue
+  seen.add(x);out.append(x)
+ return out
+
+def html_content(data,url):
+ soup=BeautifulSoup(data,"html.parser")
+ for node in soup(["script","style","noscript","svg","nav","header","footer","form","aside"]):node.decompose()
+ for node in soup.select(".b-breadcrumbs,.share,.social,.cookies,.cookie-popup,.sidebar,.navigation,.b-side-menu,.page-nav,.search"):node.decompose()
+ selectors=[".landing-text",".b-article__body",".b-article",".b-page__content",".page-content",".content-block","[itemprop=articleBody]","article","main","#content",".content"]
+ candidates=[]
+ for s in selectors:
+  for element in soup.select(s):
+   ps=clean_list([p.get_text(" ",strip=True) for p in element.select("p,li,h2,h3")])
+   candidates.append((sum(len(x) for x in ps),ps))
+ p=max(candidates,key=lambda x:x[0])[1] if candidates else []
+ if sum(map(len,p))<210:p=clean_list([n.get_text(" ",strip=True) for n in soup.select("p,li")])
+ tables=[]
+ for table in soup.select("table")[:4]:
+  rows=[]
+  for tr in table.select("tr")[:16]:
+   cells=clean_list([td.get_text(" ",strip=True) for td in tr.select("th,td")],minlen=1)
+   if cells and len(" | ".join(cells))<350:rows.append(" · ".join(cells))
+  if rows:tables.extend(rows[:12])
+ title=soup.select_one("h1")
+ h1=title.get_text(" ",strip=True) if title else ""
+ urlpath=urlparse(url).path.lower()
+ is_data="/hd_base/" in urlpath or "/statistics/" in urlpath or (tables and sum(map(len,p))<280)
+ if is_data and tables:
+  lines=tables[:9]+p[:6]
+ else:
+  lines=p[:100]+(["Таблица показателей:"]+tables[:9] if tables else [])
+ text="\n".join(lines)[:42000]
+ if len(text)<180:
+  candidate=[]
+  for a in soup.select("a[href]"):
+   href=urljoin(url,a.get("href",""))
+   try:safe_url(href)
+   except ValueError:continue
+   u=urlparse(href).path.lower()
+   name=a.get_text(" ",strip=True).lower()
+   if any(u.endswith(ext) for ext in (".pdf",".docx")) or "/unidbquery/file/" in u or "/content/document/file/" in u:
+    priority=1 if any(word in name for word in ("проект","документ","указани","положени","скачать","pdf","текст")) else 0
+    candidate.append((priority,href))
+  candidate=sorted(candidate,reverse=True)
+  attachment=next((u for _,u in candidate),None)
+ else:attachment=None
+ return {"text":text,"kind":"data" if is_data else "html","attachment":attachment,"tableRows":tables[:8],"h1":h1}
+
+def pdf_content(data):
+ pdf=fitz.open(stream=data,filetype="pdf")
+ lines=[]
+ for p in pdf:
+  if p.number>=min(28,len(pdf)):break
+  text=p.get_text("text",sort=True)
+  if text:lines.append(text)
+ out=re.sub(r"[ \t]+"," ","\n".join(lines)).strip()
+ if len(out)<200:raise ValueError("PDF без извлекаемого текста — требуется проверка/распознавание")
+ return out[:42000]
+
+def docx_content(data):
+ doc=Document(io.BytesIO(data))
+ lines=[p.text.strip() for p in doc.paragraphs if len(p.text.strip())>25]
+ for table in doc.tables[:3]:
+  lines.extend(" · ".join(c.text.strip() for c in row.cells) for row in table.rows[:8])
+ return "\n".join(lines)[:42000]
+
+def source_text(url):
+ b,kind,final=fetch(url)
+ if "pdf" in kind or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
+ if "wordprocessingml" in kind or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+ if not ("html" in kind or "text/" in kind or not kind):raise ValueError("Unsupported content type "+kind[:65])
+ info=html_content(b.decode("utf-8","replace"),final)
+ text,typ=info["text"],info["kind"]
+ if len(text)<180 and info["attachment"]:
+  attachment=info["attachment"]
+  b,k,final=fetch(attachment)
+  if "pdf" in k or urlparse(final).path.lower().endswith(".pdf"):return pdf_content(b),"pdf",final
+  if "wordprocessingml" in k or urlparse(final).path.lower().endswith(".docx"):return docx_content(b),"docx",final
+ if len(text)<100:raise ValueError("No usable content in HTML/table or attachment")
+ return text,typ,final
+
+TERMS=("принял решение","сохранить","установ","измен","составл","планиру","предлага","обязател","следует","вступ","начина","требован","срок","повышен","снижен","будет","применя","распростран","кредитн","банков","период","процент","лимит")
+def digest(text,typ,title):
+ if typ=="data":
+  rows=clean_list(text.split("\n"),1)
+  facts=rows[:5]
+  return {"short":"Последние опубликованные значения: "+"; ".join(rows[:3])[:540],"points":facts,"method":"structured-data","sourceFormat":typ}
+ normalized=re.sub(r"\s+"," ",text)
+ sentences=re.split(r"(?<=[.!?])\s+(?=[А-ЯЁ«])",normalized)
+ ranked=[]
+ for i,s in enumerate(sentences[:190]):
+  s=s.strip()
+  if not 50<len(s)<590:continue
+  sl=s.lower()
+  if any(skip in sl for skip in ("персональных данных","при использовании материала ссылка","все права защищены")):continue
+  score=(4-i if i<4 else 0)+sum(1.1 for word in TERMS if word in sl)
+  score+=min(4,len(re.findall(r"\d[\d\s.,–-]*\s*(?:%|руб|млрд|млн|дн|год|ставк)",sl))*1.8)
+  if len(s)>370:score-=1
+  ranked.append((score,i,s))
+ ranked=sorted(ranked,key=lambda x:(-x[0],x[1]))[:5]
+ ranked.sort(key=lambda x:x[1])
+ points=clean_list([x[2] for x in ranked],45)[:4]
+ if not points:
+  paras=clean_list(text.split("\n"),45)
+  points=paras[:3]
+ if not points:raise ValueError("Text is present but no informative excerpts found")
+ return {"short":" ".join(points[:2])[:700],"points":points,"method":"extractive","sourceFormat":typ}
+
+def enrich(item):
+ try:
+  text,typ,source=source_text(item["url"])
+  summary=digest(text,typ,item["title"])
+  summary.update({"charactersRead":len(text),"processedAt":stamp(),"url":source,"verification":"Extracts from source, not legal advice"})
+  item["summary"]=summary
+  item.pop("lastError",None)
+ except Exception as e:
+  item["lastError"]=str(e)[:180]
+ return item
 
 def run():
-    FILE.parent.mkdir(parents=True,exist_ok=True)
-    try:before=json.loads(FILE.read_text()) if FILE.exists() else {}
-    except Exception:before={}
-    old={x["id"]:x for x in before.get("entries",[]) if "id" in x}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-        results=list(pool.map(parse_source,SOURCES))
-    sources=[x[0] for x in results]
-    current={}
-    for status,items in results:
-        for x in items:
-            previous=current.get(x["id"])
-            if not previous or x["category"] in ("acts","projects"):
-                current[x["id"]]=x
-    for key,item in current.items():
-        if key in old:
-            previous=old[key]
-            if previous.get("summary"):item["summary"]=previous["summary"]
-            # Preserve previously identified date only when linked to this exact entry.
-            if previous.get("effectiveAt"):item["effectiveAt"]=previous["effectiveAt"]
-            old[key]={**previous,**item}
-        else:old[key]=item
-    entries=sorted(old.values(),key=lambda x:x.get("publishedAt") or "",reverse=True)[:450]
-    todo=[item for item in entries if not item.get("summary")][:12]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        augmented=list(pool.map(read_article,todo))
-    augmented_by_id={x["id"]:x for x in augmented}
-    entries=[augmented_by_id.get(x["id"],x) for x in entries]
-    payload={"updatedAt":now(),"fresh":any(x["ok"] for x in sources),"sources":sources,"entries":entries,"checkedVia":"GitHub Actions / 5-minute schedule","analytics":{"total":len(entries),"critical":sum(x["priority"]=="high" for x in entries),"acts":sum(x["category"]=="acts" for x in entries),"projects":sum(x["category"]=="projects" for x in entries)}}
-    FILE.write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":"))+"\n")
-    print("Official RSS status:",[(x["id"],x["ok"],x["count"]) for x in sources])
-    print("Stored:",len(entries),"Summarized:",len([x for x in entries if x.get("summary")]))
+ FILE.parent.mkdir(parents=True,exist_ok=True)
+ try:prior=json.loads(FILE.read_text(encoding="utf8"))
+ except Exception:prior={}
+ archive={e["id"]:e for e in prior.get("entries",[]) if e.get("id")}
+ with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+  results=list(executor.map(parse_rss,FEEDS))
+ live=[s for s,_ in results]
+ current={}
+ for state,items in results:
+  for item in items:
+   previous=current.get(item["id"])
+   if not previous or item["category"] in ("acts","projects"):current[item["id"]]=item
+ for id,item in current.items():
+  if id in archive:
+   prev=archive[id]
+   # A data page reuses its URL; refresh published rows even when link is unchanged.
+   if prev.get("summary") and item["category"]!="data":item["summary"]=prev["summary"]
+   archive[id]={**prev,**item}
+  else:archive[id]=item
+ # Freshest first, preserving previous material during RSS expiry
+ entries=sorted(archive.values(),key=lambda x:x.get("publishedAt") or "",reverse=True)[:1200]
+ # Prioritize missing summaries and refresh up to three changing data dashboards.
+ candidates=[x for x in entries if x["id"] in current and (not x.get("summary") or x["category"]=="data")]
+ other=[x for x in entries if not x.get("summary") and x["id"] not in current]
+ todo=(candidates+other)[:18]
+ with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+  processed=list(executor.map(enrich,todo))
+ up={x["id"]:x for x in processed}
+ entries=[up.get(x["id"],x) for x in entries]
+ ready=sum(bool(x.get("summary",{}).get("short")) for x in entries)
+ fetched_ok=sum(s["ok"] for s in live)
+ previous_success=prior.get("lastSuccessfulAt")
+ result={"updatedAt":stamp(),"lastSuccessfulAt":stamp() if fetched_ok else previous_success,
+  "fresh":bool(fetched_ok),"sources":live,"entries":entries,"checkedVia":"GitHub Actions — target interval 5 min",
+  "analytics":{"total":len(entries),"summarized":ready,"pending":len(entries)-ready,
+   "critical":sum(x["priority"]=="high" for x in entries),
+   "acts":sum(x["category"]=="acts" for x in entries),
+   "projects":sum(x["category"]=="projects" for x in entries)}}
+ FILE.write_text(json.dumps(result,ensure_ascii=False,separators=(",",":"))+"\n",encoding="utf8")
+ print("Sources:",[(s["id"],s["ok"],s["count"]) for s in live], "Ready:",ready,"Pending:",len(entries)-ready)
+ if fetched_ok==0:raise SystemExit("No sources reachable; snapshot retained but workflow should show a failure")
 
 if __name__=="__main__":run()
