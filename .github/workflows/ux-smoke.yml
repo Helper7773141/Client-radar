@@ -1,0 +1,35 @@
+name: New Project — site UX smoke test
+on:
+  schedule:
+    - cron: "19 7 * * *"
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/smoke_site.py"
+      - ".github/workflows/ux-smoke.yml"
+permissions:
+  contents: read
+jobs:
+  mobile-and-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install browser
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+      - name: Smoke-test public website
+        run: python scripts/smoke_site.py
+      - name: Save browser screenshots even if test fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-project-ux-screenshots
+          path: artifacts/
+          retention-days: 7
