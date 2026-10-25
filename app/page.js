@@ -4,7 +4,50 @@ const sections=[["all","Вся лента"],["acts","Нормативные ак
 const labels={acts:"Нормативный акт",projects:"Проект",press:"Пресс-релиз",events:"Новость",news:"Публикация"};
 const fmt=(v,time=false)=>{if(!v)return "Не указана";let d=new Date(v);if(isNaN(+d))return "Не указана";return new Intl.DateTimeFormat("ru-RU",time?{hour:"2-digit",minute:"2-digit",timeZone:"Europe/Moscow"}:{day:"2-digit",month:"long",year:"numeric",timeZone:"Europe/Moscow"}).format(d)+(time?" МСК":"")};
 function Mark(){return <span className="brand-mark"><i/><i/><i/><i/></span>}
-function Card({item,saved,toggle}){return <article className="article"><div className="card-top"><div className="tags"><span className={"tag tag-"+item.category}>{labels[item.category]||"Публикация"}</span><span className="tag-topic">{item.topic}</span>{item.priority==="high"&&<span className="tag-hot">● Важно</span>}</div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} title="Сохранить публикацию" aria-label="Сохранить публикацию">☆</button></div><h3><a target="_blank" rel="noopener noreferrer" href={item.url}>{item.title}</a></h3><p className="excerpt">{item.excerpt||"Анонс недоступен — подробности по ссылке на первоисточник."}</p><div className="facts"><div><span>ОПУБЛИКОВАНО</span><strong>{fmt(item.publishedAt)}</strong></div><div><span>{item.category==="projects"?"СТАТУС":"ВСТУПАЕТ В СИЛУ"}</span><strong>{item.category==="projects"?"Проект · ещё не действует":item.effectiveAt?fmt(item.effectiveAt):"Проверить документ"}</strong></div></div><div className="card-foot"><span>↗ {item.sourceName}</span><a href={item.url} target="_blank" rel="noopener noreferrer">Читать оригинал ↗</a></div></article>}
+function Card({item,saved,toggle}){
+ const [flipped,setFlipped]=useState(false);
+ const [summary,setSummary]=useState(null);
+ const [busy,setBusy]=useState(false);
+ const [problem,setProblem]=useState("");
+ async function turn(){
+   const next=!flipped;setFlipped(next);
+   if(next&&!summary&&!busy){
+     setBusy(true);setProblem("");
+     try{
+       const r=await fetch("/api/summary?url="+encodeURIComponent(item.url));
+       const j=await r.json();
+       if(!r.ok)throw Error(j.error||"Не получилось извлечь текст");
+       setSummary(j);
+     }catch(e){setProblem(e.message||"Ошибка загрузки")}finally{setBusy(false)}
+   }
+ }
+ const ignore=e=>Boolean(e.target.closest("a,button,input,select"));
+ return <article className="article flip-card" tabIndex={0} aria-label={"Публикация: "+item.title+". Нажмите Enter, чтобы открыть конспект"}
+  onClick={e=>{if(!ignore(e))turn()}}
+  onKeyDown={e=>{if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){e.preventDefault();turn()}}}>
+ <div className={"flip-inner "+(flipped?"is-flipped":"")}>
+  <div className="flip-face flip-front">
+   <div className="card-top"><div className="tags"><span className={"tag tag-"+item.category}>{labels[item.category]||"Публикация"}</span><span className="tag-topic">{item.topic}</span>{item.priority==="high"&&<span className="tag-hot">● Важно</span>}</div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} title="Сохранить публикацию" aria-label="Сохранить публикацию">☆</button></div>
+   <h3><a target="_blank" rel="noopener noreferrer" href={item.url}>{item.title}</a></h3>
+   <p className="excerpt">{item.excerpt||"Официальный анонс не содержит описания. Откройте конспект, чтобы прочитать суть публикации."}</p>
+   <div className="facts"><div><span>ОПУБЛИКОВАНО</span><strong>{fmt(item.publishedAt)}</strong></div><div><span>{item.category==="projects"?"СТАТУС":"ВСТУПАЕТ В СИЛУ"}</span><strong>{item.category==="projects"?"Проект · ещё не действует":item.effectiveAt?fmt(item.effectiveAt):"Уточнить в документе"}</strong></div></div>
+   <div className="card-foot"><span>↗ {item.sourceName}</span><a href={item.url} target="_blank" rel="noopener noreferrer">Читать оригинал ↗</a></div>
+   <button className="flip-button" onClick={turn}><span>↻</span> Перевернуть — краткий конспект</button>
+  </div>
+  <div className="flip-face flip-back">
+   <div className="card-top"><span className="tag tag-acts">КРАТКИЙ КОНСПЕКТ</span><button className="flip-back-button" onClick={turn}>↶ Назад</button></div>
+   <h3>{item.title}</h3>
+   {busy?<div className="summary-state"><span className="loading-ring"/><b>Читаем текст на сайте ЦБ…</b><p>Извлекаем содержание, выделяем главное.</p></div>:
+   problem?<div className="summary-state"><b>Не удалось прочитать публикацию</b><p>{problem}</p><button onClick={e=>{e.preventDefault();setFlipped(false);setTimeout(()=>turn(),0)}}>Повторить</button></div>:
+   summary?<><div className="summary-meta">{summary.method==="ai"?"✦ ИИ-конспект полного текста":"◈ Автоматическая выдержка из текста"} <span>·</span> {summary.charactersRead?.toLocaleString("ru-RU")} символов</div>
+     <div className="summary-body"><h4>Суть</h4><p>{summary.short}</p>{summary.points?.length>0&&<><h4>Главные факты</h4><ul>{summary.points.map((p,i)=><li key={i}>{p}</li>)}</ul></>}{summary.effectiveAt&&<p className="summary-effective">Дата действия по анализу: {summary.effectiveAt}</p>}</div>
+   </>:<div className="summary-state"><b>Нажмите, чтобы получить конспект</b></div>}
+   <div className="summary-footer"><a href={item.url} target="_blank" rel="noopener noreferrer">Открыть полный документ ЦБ ↗</a><small>{summary?.method==="ai"?"Данные требуют сверки с оригиналом":"Автовыдержка без ИИ; проверьте смысл по первоисточнику"}</small></div>
+  </div>
+ </div>
+ </article>;
+}
+
 export default function Home(){
 const [data,setData]=useState(null),[error,setError]=useState(""),[loading,setLoading]=useState(true),[last,setLast]=useState(null),[refreshing,setRefreshing]=useState(false);
 const [tab,setTab]=useState("all"),[search,setSearch]=useState(""),[topic,setTopic]=useState("all"),[sort,setSort]=useState("newest"),[saved,setSaved]=useState([]),[savedOnly,setSavedOnly]=useState(false),[showSources,setShowSources]=useState(false),[limit,setLimit]=useState(18);
