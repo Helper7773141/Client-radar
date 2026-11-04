@@ -1,76 +1,184 @@
 "use client";
-import {useEffect,useMemo,useState} from "react";
-const sections=[["all","Вся лента"],["acts","Нормативные акты"],["projects","Проекты"],["press","Пресс-релизы"],["events","Новости и события"],["data","Данные и ставки"]];
-const labels={acts:"Нормативный акт",projects:"Проект",press:"Пресс-релиз",events:"Новость",news:"Публикация",data:"Данные"};
-const fmt=(v,time=false)=>{if(!v)return "Не указана";let d=new Date(v);if(isNaN(+d))return "Не указана";return new Intl.DateTimeFormat("ru-RU",time?{hour:"2-digit",minute:"2-digit",timeZone:"Europe/Moscow"}:{day:"2-digit",month:"long",year:"numeric",timeZone:"Europe/Moscow"}).format(d)+(time?" МСК":"")};
-function Mark(){return <span className="brand-mark"><i/><i/><i/><i/></span>}
-function Card({item,saved,toggle}){
- const [expanded,setExpanded]=useState(false);
- const [summary,setSummary]=useState(item.summary||null);
- const [busy,setBusy]=useState(false);
- const [error,setError]=useState("");
- useEffect(()=>{if(item.summary?.short)setSummary(item.summary)},[item.summary]);
- const hasSummary=Boolean(summary?.short);
- const usableExcerpt=Boolean(item.excerpt?.length>65);
- const isData=item.category==="data";
- async function load(){
-  if(busy)return;
-  setBusy(true);setError("");
-  try{
-   const r=await fetch("/api/summary?url="+encodeURIComponent(item.url),{cache:"no-store"});
-   const json=await r.json();
-   if(!r.ok||!json.short)throw Error(json.error||"Пока не удалось подготовить выдержку");
-   setSummary(json);
-  }catch(e){setError(e.message||"Источник временно недоступен")}
-  finally{setBusy(false)}
- }
- function details(){setExpanded(v=>!v);if(!expanded&&!hasSummary&&!error)load()}
- const type=item.category==="projects"?"Проект — не действует":item.category==="acts"?"Нормативный документ":isData?"Данные и показатели":labels[item.category]||"Публикация";
- return <article className="article digest-card">
-  <div className="card-top"><div className="tags">
-   <span className={"tag tag-"+item.category}>{labels[item.category]|| (isData?"Данные":"Публикация")}</span>
-   <span className="tag-topic">{item.topic}</span>
-   {item.priority==="high"&&<span className="tag-hot">● Предварительно важное</span>}
-  </div><button className={"save "+(saved?"saved":"")} onClick={()=>toggle(item.id)} aria-label={saved?"Убрать из сохранённого":"Сохранить публикацию"} title={saved?"Убрать из сохранённого":"Сохранить"}>{saved?"★":"☆"}</button></div>
-  <div className="digest-date">{item.publishedAt?fmt(item.publishedAt):item.firstSeenAt?"Обнаружено "+fmt(item.firstSeenAt):"Дата публикации не указана"} <span>·</span> {item.sourceName||"Банк России"}</div>
-  <h3><a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a></h3>
-  {hasSummary?<><p className="digest-summary">{summary.short}</p><div className="digest-method">{summary.method==="ai"?"✦ ИИ-конспект":summary.method==="structured-data"?"▤ Показатели из таблицы":"✓ Факты из оригинала"} <span>·</span> {summary.sourceFormat?.toUpperCase()||"HTML"}</div></>:
-    usableExcerpt?<><p className="digest-summary digest-pending">{item.excerpt.slice(0,310)}</p><div className="digest-method muted">◷ Пока только анонс · Полный текст в обработке</div></>:
-    <p className="digest-summary digest-pending">{isData?"Опубликованы новые показатели. Откройте детали для извлечения значений таблицы.":"Публикация найдена. Конспект готовится — текст источника ещё не обработан."}</p>}
-  <div className="digest-info"><span>{type}</span>{item.category==="acts"&&<span>{item.effectiveAt?"Начало действия: "+fmt(item.effectiveAt):"Дата действия требует проверки"}</span>}</div>
-  {expanded&&<section className="digest-details" aria-label="Детали и факты">
-   <h4>Ключевые факты из первоисточника</h4>
-   {busy?<p className="detail-muted">Получаем содержание с сайта Банка России…</p>:
-    error?<><p className="detail-muted">Сейчас не удалось прочитать источник: {error}. Ссылка на оригинал доступна ниже.</p><button className="retry" onClick={load}>Попробовать ещё раз</button></>:
-    hasSummary?<><ul>{(summary.points||[]).filter(x=>x!==summary.short).slice(0,4).map((text,i)=><li key={i}>{text}</li>)}</ul>
-     {summary.effectiveAt&&item.category==="acts"&&<p className="detail-muted">Возможная дата действия: {summary.effectiveAt} — проверьте текст нормативного акта.</p>}{summary.effectiveRule&&(item.category==="acts"||item.category==="projects")&&<p className="detail-note"><b>Условие действия в тексте:</b> {summary.effectiveRule}</p>}
-     <p className="detail-note">{summary.method==="ai"?"Сформировано ИИ по найденному тексту. Требуется проверка по источнику.":summary.method==="structured-data"?"Значения извлечены из таблицы первоисточника.":"Факты автоматически выбраны из опубликованного текста, без ИИ-интерпретации."}</p>
-    </>:<p className="detail-muted">Содержание ещё не обработано. Исходный документ можно открыть на сайте ЦБ.</p>}
-  </section>}
-  <div className="digest-actions"><button className="show-more" onClick={details} aria-expanded={expanded}>{expanded?"Свернуть ↑":hasSummary?"Все факты ↓":"Получить конспект ↓"}</button><a href={item.url} target="_blank" rel="noopener noreferrer">Первоисточник ↗</a></div>
- </article>;
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const SECTIONS = [
+  ["A","Сельское, лесное хозяйство, охота, рыболовство и рыбоводство"],
+  ["B","Добыча полезных ископаемых"],
+  ["C","Обрабатывающие производства"],
+  ["D","Обеспечение электрической энергией, газом и паром; кондиционирование воздуха"],
+  ["E","Водоснабжение; водоотведение, сбор и утилизация отходов"],
+  ["F","Строительство"],
+  ["G","Торговля оптовая и розничная; ремонт автотранспортных средств"],
+  ["H","Транспортировка и хранение"],
+  ["I","Деятельность гостиниц и предприятий общественного питания"],
+  ["J","Деятельность в области информации и связи"],
+  ["K","Деятельность финансовая и страховая"],
+  ["L","Деятельность по операциям с недвижимым имуществом"],
+  ["M","Деятельность профессиональная, научная и техническая"],
+  ["N","Деятельность административная и сопутствующие услуги"],
+  ["O","Государственное управление и обеспечение военной безопасности"],
+  ["P","Образование"],
+  ["Q","Деятельность в области здравоохранения и социальных услуг"],
+  ["R","Деятельность в области культуры, спорта и организации досуга"],
+  ["S","Предоставление прочих видов услуг"],
+  ["T","Деятельность домашних хозяйств"],
+  ["U","Деятельность экстерриториальных организаций и органов"]
+];
+const ASSETS = ["Компания / доля в бизнесе","Производственный комплекс","Завод / предприятие","Коммерческая недвижимость","Склад / логистический объект","Земельный участок","Оборудование","Инфраструктурный актив","Инвестиционный проект","Другой актив"];
+const REGIONS = ["Центральный ФО","Северо-Западный ФО","Южный ФО","Северо-Кавказский ФО","Приволжский ФО","Уральский ФО","Сибирский ФО","Дальневосточный ФО","Вся Россия","За пределами РФ"];
+const TYPES = ["100% компании","Контрольная доля","Миноритарная доля","Продажа актива","Аренда / продажа прав","Другой формат"];
+const INITIAL = {asset:"",region:"",type:"",min:"",max:"",period:"",unit:""};
+const CLASSIFIER_URL = "https://raw.githubusercontent.com/prog815/okved2/main/okved2.json";
+const SOURCE_URL = "https://rosstat.gov.ru/classification";
+
+const paths = {
+  grid:"M3 3h8v8H3z M13 3h8v8h-8z M3 13h8v8H3z M13 13h8v8h-8z",
+  search:"M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
+  book:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20 M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z",
+  layers:"M12 2 2 7l10 5 10-5-10-5z M2 12l10 5 10-5 M2 17l10 5 10-5",
+  chevron:"m6 9 6 6 6-6",
+  right:"M5 12h14 m-6-6 6 6-6 6",
+  back:"M19 12H5 m6-6-6 6 6 6",
+  sliders:"M4 7h10 m4 0h2 M4 17h2 m4 0h10 M14 4v6 M8 14v6",
+  close:"M18 6 6 18 M6 6l12 12",
+  check:"M20 6 9 17l-5-5",
+  shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  info:"M12 16v-4 M12 8h.01 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
+  plus:"M12 5v14 M5 12h14",
+  reset:"M3 12a9 9 0 1 0 2.7-6.4 M3 4v5h5",
+  spark:"m12 3 1.9 5.9L20 11l-6.1 2.1L12 19l-1.9-5.9L4 11l6.1-2.1L12 3z",
+  building:"M3 22h18 M5 22V5l7-3 7 3v17 M9 9h.01 M15 9h.01 M9 13h.01 M15 13h.01 M10 22v-5h4v5",
+  clock:"M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2",
+  funnel:"M4 4h16l-6 7v8l-4 2V11L4 4z",
+  external:"M14 3h7v7 M10 14 21 3 M21 13v8H3V3h8"
+};
+function Icon({name,size=18}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.info}/></svg>;
+}
+function ExpobankLogo({light=false}) {
+  return <div className={"brand "+(light?"brand-light":"")}>
+    <span className="brand-mark" aria-hidden="true"><i/><i/><i/><b/></span>
+    <span className="brand-type">ЭКСПОБАНК</span>
+  </div>;
+}
+function Select({label,value,onChange,items,placeholder="Все",disabled=false}) {
+  return <label className="field"><span className="field-label">{label}</span><span className="select-wrap"><select value={value} onChange={e=>onChange(e.target.value)} disabled={disabled}><option value="">{placeholder}</option>{items.map(item=><option key={item} value={item}>{item}</option>)}</select><Icon name="chevron" size={15}/></span></label>;
+}
+function IndustryPicker({all,loading,error,onSelect,onClose}) {
+  const [q,setQ]=useState("");
+  const [section,setSection]=useState("");
+  const [parent,setParent]=useState("");
+  const inputRef=useRef(null);
+  useEffect(()=>{inputRef.current?.focus()},[]);
+  const childrenMap=useMemo(()=>{const map=new Map(); all.forEach(x=>{if(x.p)map.set(String(x.p),(map.get(String(x.p))||0)+1)});return map;},[all]);
+  const matches=useMemo(()=>{
+    const term=q.toLocaleLowerCase("ru").replace(/ё/g,"е").trim();
+    if(term) return all.filter(x=>Number(x.v)!==0 && (String(x.c).toLocaleLowerCase("ru").includes(term) || String(x.n).toLocaleLowerCase("ru").replace(/ё/g,"е").includes(term))).slice(0,90);
+    if(!section) return [];
+    if(parent) return all.filter(x=>String(x.p)===parent).slice(0,120);
+    return all.filter(x=>String(x.p)===section || Number(x.v)===2&&x.s===section).slice(0,120);
+  },[all,section,parent,q]);
+  const goBack=()=>{
+    if(q){setQ("");return;}
+    if(parent){
+      const item=all.find(x=>x.c===parent);
+      if(item && item.p && String(item.p)!==section){setParent(String(item.p))} else setParent("");
+    } else setSection("");
+  };
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}} role="presentation">
+    <section className="picker" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <div className="picker-head"><div><p className="eyebrow">ЕДИНЫЙ СПРАВОЧНИК</p><h2 id="picker-title">Отрасли и подотрасли</h2><p>Выберите код ОКВЭД-2 — формулировка всегда будет одинаковой.</p></div><button className="icon-button" onClick={onClose} aria-label="Закрыть"><Icon name="close"/></button></div>
+      <div className="picker-controls">
+        <div className="picker-search"><Icon name="search" size={18}/><input ref={inputRef} placeholder="Поиск по названию или коду, например 10.51" value={q} onChange={e=>setQ(e.target.value)}/>{q&&<button onClick={()=>setQ("")} aria-label="Очистить поиск"><Icon name="close" size={16}/></button>}</div>
+        <div className="pathline"><button onClick={()=>{setSection("");setParent("");setQ("")}}>Все отрасли</button>{section&&<><span>/</span><button onClick={()=>{setParent("");setQ("")}}>Раздел {section}</button></>}{parent&&<><span>/</span><b>{parent}</b></>}</div>
+      </div>
+      <div className="picker-list">
+        {!section&&!q&&SECTIONS.map(([code,title])=><button className="industry-row" key={code} onClick={()=>setSection(code)}><span className="industry-code section-code">{code}</span><span className="industry-name">{title}</span><span className="industry-action"><Icon name="right" size={17}/></span></button>)}
+        {(section||q)&&matches.map(item=><div className="industry-row" key={item.c}>
+          <button className="industry-browse" onClick={()=>{if(childrenMap.get(String(item.c))){setSection(item.s);setParent(String(item.c));setQ("");}else onSelect(item)}}><span className="industry-code">{item.c}</span><span className="industry-name">{item.n}{q&&<small>Раздел {item.s}</small>}</span>{childrenMap.get(String(item.c))>0&&<Icon name="right" size={17}/>}</button>
+          <button className="choose-code" onClick={()=>onSelect(item)}>Выбрать</button>
+        </div>)}
+        {(section||q)&&matches.length===0&&<div className="picker-empty">{loading?"Загружаем полный классификатор…":error?"Не удалось загрузить подотрасли. Проверьте подключение.":"По выбранным условиям записей нет."}</div>}
+      </div>
+      <div className="picker-footer"><div className="source-dot"/><span>{loading?"Загрузка классификатора…":error?"Справочник временно недоступен":all.length.toLocaleString("ru-RU")+" кодов и разделов"} · ОКВЭД-2 · Росстат, 01.10.2026</span><a href={SOURCE_URL} target="_blank" rel="noreferrer">Первоисточник <Icon name="external" size={13}/></a></div>
+    </section>
+  </div>;
 }
 
-export default function Home(){
-const [data,setData]=useState(null),[error,setError]=useState(""),[loading,setLoading]=useState(true),[last,setLast]=useState(null),[refreshing,setRefreshing]=useState(false);
-const [tab,setTab]=useState("all"),[search,setSearch]=useState(""),[topic,setTopic]=useState("all"),[sort,setSort]=useState("newest"),[saved,setSaved]=useState([]),[savedOnly,setSavedOnly]=useState(false),[showSources,setShowSources]=useState(false),[limit,setLimit]=useState(18);
-useEffect(()=>{try{setSaved(JSON.parse(localStorage.getItem("new-project-bookmarks")||"[]"))}catch{}},[]);
-async function refresh(manual=false){if(manual)setRefreshing(true);try{const r=await fetch("/api/feed",{cache:"no-store"});const j=await r.json();if(!j.entries||!j.sources)throw Error("Недоступен ответ сервера");setData(j);setError(j.fresh?"":"Нет свежего подтверждения получения данных с источников");}catch(e){setError(e.message||"Ошибка получения публикаций")}finally{setLast(new Date().toISOString());setLoading(false);setRefreshing(false)}}
-useEffect(()=>{refresh();const i=setInterval(()=>{if(!document.hidden)refresh()},15000);const handler=()=>{if(!document.hidden)refresh()};document.addEventListener("visibilitychange",handler);return()=>{clearInterval(i);document.removeEventListener("visibilitychange",handler)}},[]);
-const entries=data?.entries||[], good=data?.sources?.filter(x=>x.ok).length||0, summarized=entries.filter(x=>x.summary?.short).length, topics=[...new Set(entries.map(x=>x.topic))].sort((a,b)=>a.localeCompare(b,"ru"));
-const filtered=useMemo(()=>{const q=search.toLocaleLowerCase("ru").trim();const a=entries.filter(x=>(!savedOnly||saved.includes(x.id))&&(tab==="all"||x.category===tab)&&(topic==="all"||x.topic===topic)&&(!q||(x.title+" "+(x.excerpt||"")+" "+x.topic+" "+(x.summary?.short||"")).toLocaleLowerCase("ru").includes(q)));if(sort==="priority")a.sort((a,b)=>({high:0,medium:1,normal:2}[a.priority]-{high:0,medium:1,normal:2}[b.priority])||(Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0)));return a},[entries,saved,savedOnly,tab,topic,search,sort]);
-function toggle(id){setSaved(old=>{let v=old.includes(id)?old.filter(x=>x!==id):[...old,id];try{localStorage.setItem("new-project-bookmarks",JSON.stringify(v))}catch{}return v})}
-function clear(){setTab("all");setSearch("");setTopic("all");setSavedOnly(false);setLimit(18)}
-return <div className="site"><header className="nav"><div className="container nav-in"><a href="/" className="logo"><Mark/>new<span>project</span><sup> /β</sup></a><div className="nav-menu"><a href="#feed">Публикации</a><a href="#how">Как работает</a><button onClick={()=>setShowSources(!showSources)}>Источники ↗</button></div><span className="nav-live"><i/>МОНИТОРИНГ ЦБ РФ</span></div></header>
-<section className="hero"><div className="container hero-in"><div><p className="overline"><span/> REGULATORY INTELLIGENCE <em>01 / БАНК РОССИИ</em></p><h1>ЦБ России. <b>Главное за минуту.</b></h1><p className="hero-text">Новости, нормативные акты и решения ЦБ — с краткой сутью и прямой ссылкой на документ.</p><div className="hero-actions"><a href="#feed" className="primary">К свежим публикациям <span>→</span></a><button onClick={()=>setShowSources(!showSources)}>Наши источники ↗</button></div></div><aside className="radar-card"><div className="radar-title"><i/> SOURCE STATUS</div><div className="radar-shape"><span/><span/><span/><b/></div><div className="radar-bottom"><small>ПОСЛЕДНЕЕ ОБРАЩЕНИЕ</small><strong>{last?fmt(last,true):"Подключаемся…"}</strong><small>{good}/{data?.sources?.length||5} RSS-источников ответили</small></div></aside></div></section>
-<main className="container"><section className="stats"><div><small>ПУБЛИКАЦИИ</small><strong>{data?entries.length:"—"}</strong><span>В ленте и сохранённом архиве</span></div><div><small>ГОТОВЫЕ КОНСПЕКТЫ</small><strong>{data?summarized:"—"}</strong><span>Факты из первоисточников</span></div><div><small>НОРМАТИВНЫЕ АКТЫ</small><strong>{data?data.analytics.acts:"—"}</strong><span>Официальные публикации</span></div><div><small>ПРОЕКТЫ ДОКУМЕНТОВ</small><strong>{data?data.analytics.projects:"—"}</strong><span>В стадии обсуждения</span></div></section>
-{showSources&&<section className="sources" id="sources"><div className="sources-top"><div><small>ПРОЗРАЧНОСТЬ ДАННЫХ</small><h2>Подключённые источники</h2></div><button onClick={()=>setShowSources(false)}>Скрыть ×</button></div><div className="source-list">{(data?.sources||[]).map(s=><div className="source" key={s.id}><span className={s.ok?"ok":"bad"}>● {s.ok?"На связи":"Недоступен"}</span><h4>{s.name}</h4><p>{s.ok?s.count+" публикаций в ответе":s.error||"Ошибка подключения"}</p><a href={s.page} target="_blank" rel="noopener noreferrer">Открыть раздел ↗</a></div>)}</div></section>}
-<section className="workspace" id="feed"><div className="headline"><div><span className="overlabel">— ЕДИНАЯ ЛЕНТА</span><h2>Главное сейчас<span>.</span></h2><p>Официальные публикации, без вымышленных новостей и дат.</p></div><div className="check-status"><i className={data?.fresh&&good?"ok-dot":"warn-dot"}/><div>{data?.fresh&&good?"Источники доступны":entries.length?"Данные могут устареть":"Источники недоступны"}<small>Последняя серверная проверка: {data?.archiveUpdatedAt?new Intl.DateTimeFormat("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Moscow"}).format(new Date(data.archiveUpdatedAt))+" МСК":"ещё не подтверждена"}</small></div><button className={refreshing?"spinning":""} title="Проверить сейчас" onClick={()=>refresh(true)} disabled={refreshing}>↻</button></div></div>
-{error&&<div className="error">ⓘ {error}. Новые публикации могут появляться с задержкой.</div>}
-<div className="control"><div className="tabs">{sections.map(([id,title])=><button key={id} onClick={()=>{setTab(id);setLimit(18)}} className={tab===id?"active":""}>{title}</button>)}</div><div className="filters"><label className="search"><span>⌕</span><input value={search} placeholder="Поиск по публикациям" onChange={e=>{setSearch(e.target.value);setLimit(18)}}/></label><select aria-label="Тема" value={topic} onChange={e=>setTopic(e.target.value)}><option value="all">Все темы</option>{topics.map(x=><option key={x}>{x}</option>)}</select><select aria-label="Сортировка" value={sort} onChange={e=>setSort(e.target.value)}><option value="newest">Сначала новые</option><option value="priority">Сначала важные</option></select><button className={"favorites "+(savedOnly?"on":"")} onClick={()=>setSavedOnly(!savedOnly)}>☆ Сохранённое</button></div></div>
-<div className="results"><span>{loading?"Загружаем публикации…":<>Найдено <b>{filtered.length}</b> публикаций</>}</span><span>● Обновление фонового архива по расписанию (цель — 5 минут)</span></div>
-{loading?<div className="empty"><div className="loading-ring"/><h3>Получаем данные Банка России</h3><p>Проверяем официальные RSS-каналы…</p></div>:filtered.length?<><div className="cards">{filtered.slice(0,limit).map(x=><Card key={x.id} item={x} saved={saved.includes(x.id)} toggle={toggle}/>)}</div>{filtered.length>limit&&<div className="more"><button onClick={()=>setLimit(n=>n+18)}>Показать ещё →</button></div>}</>:<div className="empty"><h3>{data?.fresh?"Ничего не найдено":"Источники не ответили"}</h3><p>{data?.fresh?"Попробуйте изменить фильтры.":"Проверьте доступность ЦБ или откройте источник напрямую."}</p><button onClick={clear}>Сбросить фильтры</button></div>}
-<p className="disclaimer">ⓘ Краткие факты извлекаются из HTML, таблиц и поддерживаемых вложений. Без подключённого API ИИ это автоматическая выдержка, а не экспертное юридическое заключение. Если дата вступления в силу не подтверждена, она не подставляется автоматически. Принимайте решения только после проверки первоисточника.</p></section></main>
-<section className="method" id="how"><div className="container method-in"><div><span className="overlabel">ПРИНЦИП РАБОТЫ</span><h2>Меньше шума.<br/><span>Больше ясности.</span></h2></div><div className="steps"><div><small>01</small><h3>Собираем</h3><p>Официальные RSS-потоки и отдельная проверка реестров нормативных актов и проектов.</p></div><div><small>02</small><h3>Упорядочиваем</h3><p>Сохраняем историю, убираем повторы, извлекаем факты из статей, таблиц и документов PDF/DOCX.</p></div><div><small>03</small><h3>Сверяем</h3><p>Каждый конспект связан с оригиналом ЦБ. Даты и правовой статус без подтверждения не придумываем.</p></div></div></div></section>
-<footer><div className="container footer-in"><div className="footer-logo">new<span>project</span><small>Независимый мониторинг. Не является официальным сайтом Банка России.</small></div><div><a href="https://www.cbr.ru/" target="_blank" rel="noopener noreferrer">Банк России ↗</a><small>Время — московское. RSS-ленты не гарантируют полного охвата сайта.</small></div></div></footer></div>
+export default function Home() {
+  const [tab,setTab]=useState("buy");
+  const [view,setView]=useState("requests");
+  const [filters,setFilters]=useState(INITIAL);
+  const [industry,setIndustry]=useState(null);
+  const [picker,setPicker]=useState(false);
+  const [all,setAll]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState(false);
+  const [search,setSearch]=useState("");
+  const [mobileNav,setMobileNav]=useState(false);
+  const doLoad=()=>{
+    setLoading(true);setError(false);
+    fetch(CLASSIFIER_URL,{cache:"force-cache"})
+      .then(response=>{if(!response.ok)throw new Error("Источник недоступен");return response.json()})
+      .then(records=>{if(!Array.isArray(records)||records.length<1000)throw new Error("Неполный справочник");setAll(records.map(item=>({...item,c:String(item.c||""),n:String(item.n||""),p:String(item.p||""),s:String(item.s||""),v:Number(item.v||0)})));setLoading(false)})
+      .catch(()=>{setLoading(false);setError(true)});
+  };
+  useEffect(()=>{doLoad()},[]);
+  useEffect(()=>{function key(e){if(e.key==="Escape")setPicker(false)}window.addEventListener("keydown",key);return ()=>window.removeEventListener("keydown",key)},[]);
+  const setF=(name,value)=>setFilters(prev=>({...prev,[name]:value}));
+  const reset=()=>{setFilters(INITIAL);setIndustry(null);setSearch("")};
+  const fList=Object.entries(filters).filter(([,v])=>!!v);
+  const filterCount=fList.length+(industry?1:0)+(search?1:0);
+  const labelMap={asset:"Тип актива",region:"География",type:"Формат сделки",min:"От, млн ₽",max:"До, млн ₽",period:"Дата публикации",unit:"Бизнес-юнит"};
+  const navigate=(v)=>{setView(v);setMobileNav(false)};
+  const openPicker=()=>setPicker(true);
+  const keyText=tab==="buy"?"покупку":"продажу";
+  const ready=all.length>1000;
+  return <div className="shell">
+    <aside className={"sidebar "+(mobileNav?"sidebar-open":"")}>
+      <div className="sidebar-logo"><ExpobankLogo light/><span className="sidebar-subbrand">M&A Bridge <em>демо</em></span></div>
+      <p className="nav-label">РАБОЧЕЕ ПРОСТРАНСТВО</p>
+      <nav className="side-nav">
+        <button className={view==="requests"?"active":""} onClick={()=>navigate("requests")}><Icon name="grid" size={19}/> Витрина заявок <span className="nav-count">0</span></button>
+        <button className={view==="directory"?"active":""} onClick={()=>navigate("directory")}><Icon name="book" size={19}/> Справочник отраслей</button>
+        <button className={view==="about"?"active":""} onClick={()=>navigate("about")}><Icon name="layers" size={19}/> О платформе</button>
+      </nav>
+      <div className="sidebar-bottom"><div className="side-info"><span className="pulse-dot"/><span>Демонстрационный режим</span></div><p>Только интерфейс. Без реальных заявок, авторизации и хранения данных.</p><div className="sidebar-footer">EXPOBANK · M&A BRIDGE</div></div>
+    </aside>
+    <div className="main-wrap">
+      <header className="topbar"><button className="mobile-menu" aria-label="Открыть меню" onClick={()=>setMobileNav(v=>!v)}><Icon name="grid" size={21}/></button><div className="crumb">Внутренние решения <span>/</span> <b>{view==="requests"?"Витрина заявок":view==="directory"?"Справочник отраслей":"О платформе"}</b></div><div className="topbar-right"><span className="top-tag"><span className="pulse-dot"/> ДЕМО-ВЕРСИЯ</span><span className="top-avatar">EX</span></div></header>
+      <main className="content">
+        {view==="requests"&&<>
+          <div className="hero"><div className="hero-copy"><span className="hero-kicker"><span className="hero-kicker-dot"/> ВНУТРЕННЯЯ ПЛАТФОРМА ЭКСПОБАНКА</span><h1>Сделки начинаются<br/>с правильного <span>совпадения.</span></h1><p>M&A Bridge объединяет запросы на покупку и продажу корпоративных активов в едином пространстве.</p><div className="hero-badges"><span><Icon name="shield" size={15}/> Внутренний инструмент</span><span><Icon name="spark" size={15}/> ОКВЭД-2</span></div></div><div className="hero-graphic" aria-hidden="true"><div className="hero-node node-a"><span className="node-emblem">↑</span><div><b>ПОКУПАТЕЛЬ</b><small>Запрос на приобретение</small></div></div><div className="hero-connection"><span/><i>↔</i><span/></div><div className="hero-node node-b"><span className="node-emblem">↓</span><div><b>ПРОДАВЕЦ</b><small>Предложение актива</small></div></div></div></div>
+          <div className="section-top"><div><p className="eyebrow">РАБОЧАЯ ПАНЕЛЬ</p><h2>Витрина возможностей</h2><p>Единая точка поиска запросов по всей сети банка.</p></div><span className="no-store"><Icon name="info" size={15}/> Данные не сохраняются</span></div>
+          <div className="metrics"><div className="metric"><div className="metric-icon orange"><Icon name="right" size={20}/></div><div><span>Заявок на покупку</span><strong>0</strong></div><small>Нет данных</small></div><div className="metric"><div className="metric-icon teal"><Icon name="layers" size={20}/></div><div><span>Заявок на продажу</span><strong>0</strong></div><small>Нет данных</small></div><div className="metric"><div className="metric-icon muted"><Icon name="book" size={20}/></div><div><span>В справочнике отраслей</span><strong>{ready?all.length.toLocaleString("ru-RU"):loading?"…":"—"}</strong></div><small>{ready?"ОКВЭД-2":error?"Ошибка загрузки":"Загрузка"}</small></div></div>
+          <div className="work-area">
+            <div className="board-title"><div className="board-tabs" role="tablist"><button role="tab" aria-selected={tab==="buy"} className={tab==="buy"?"selected":""} onClick={()=>setTab("buy")}>Купить <span>0</span></button><button role="tab" aria-selected={tab==="sell"} className={tab==="sell"?"selected":""} onClick={()=>setTab("sell")}>Продать <span>0</span></button></div><span className="tab-hint"><Icon name="funnel" size={15}/> Поиск и фильтрация</span></div>
+            <div className="filter-panel"><div className="filter-heading"><strong><Icon name="sliders" size={18}/> Фильтры</strong><button onClick={reset}><Icon name="reset" size={15}/> Сбросить все</button></div>
+              <div className="filters-grid">
+                <label className="field field-wide"><span className="field-label">Поиск по заявкам</span><span className="search-field"><Icon name="search" size={17}/><input placeholder="Компания, объект, ключевое слово…" value={search} onChange={e=>setSearch(e.target.value)}/></span></label>
+                <Select label="Тип актива" value={filters.asset} onChange={v=>setF("asset",v)} items={ASSETS} placeholder="Все типы"/>
+                <label className="field field-industry"><span className="field-label">Отрасль / подотрасль (ОКВЭД-2)</span><button className={"industry-input "+(industry?"has-value":"")} onClick={openPicker}><Icon name="book" size={17}/><span>{industry?industry.c+" · "+industry.n:"Выбрать из справочника"}</span><Icon name="chevron" size={15}/></button></label>
+                <Select label="География" value={filters.region} onChange={v=>setF("region",v)} items={REGIONS}/>
+                <Select label="Тип сделки" value={filters.type} onChange={v=>setF("type",v)} items={TYPES}/>
+                <label className="field field-slim"><span className="field-label">Сумма от, млн ₽</span><input className="basic-input" type="number" min="0" placeholder="От" value={filters.min} onChange={e=>setF("min",e.target.value)}/></label>
+                <label className="field field-slim"><span className="field-label">Сумма до, млн ₽</span><input className="basic-input" type="number" min="0" placeholder="До" value={filters.max} onChange={e=>setF("max",e.target.value)}/></label>
+                <Select label="Дата размещения" value={filters.period} onChange={v=>setF("period",v)} items={["За 7 дней","За 30 дней","За 90 дней","За год"]}/>
+                <Select label="Бизнес-юнит" value={filters.unit} onChange={v=>setF("unit",v)} items={["Корпоративный бизнес (демо)","Региональная сеть (демо)","Прочие подразделения (демо)"]}/>
+              </div>
+              {filterCount>0&&<div className="active-filters"><span>Применено: {filterCount}</span>{industry&&<button onClick={()=>setIndustry(null)}>ОКВЭД {industry.c} <Icon name="close" size={13}/></button>}{fList.map(([k,v])=><button key={k} onClick={()=>setF(k,"")}>{labelMap[k]}: {v} <Icon name="close" size={13}/></button>)}{search&&<button onClick={()=>setSearch("")}>Поиск: {search}<Icon name="close" size={13}/></button>}</div>}
+            </div>
+            <div className="results-heading"><div><strong>Заявки на {keyText}</strong><span>0 результатов</span></div><span className="results-view"><Icon name="grid" size={16}/> Список</span></div>
+            <div className="result-cols"><span>ОБЪЕКТ / ОТРАСЛЬ</span><span>ГЕОГРАФИЯ</span><span>СТОИМОСТЬ</span><span>РАЗМЕЩЕНИЕ</span></div>
+            <div className="empty-state"><div className="empty-illustration"><div className="empty-card card-back"/><div className="empty-card card-front"><Icon name="search" size={31}/><span className="empty-lines"><i/><i/><i/></span></div><div className="empty-star">+</div></div><h3>Заявок пока нет</h3><p>Это визуальная версия платформы. Здесь будут отображаться реальные запросы на {keyText}, когда появятся база данных и доступ для менеджеров.</p>{filterCount>0?<button className="button-outline" onClick={reset}><Icon name="reset" size={16}/> Сбросить фильтры</button>:<button className="button-outline" onClick={openPicker}><Icon name="book" size={16}/> Посмотреть справочник отраслей</button>}</div>
+          </div>
+          <div className="bottom-note"><Icon name="shield" size={18}/><div><b>Демо без клиентских данных</b><span>Все фильтры работают в браузере, но ничего не отправляют и не записывают. Реальные сделки здесь не размещаются.</span></div></div>
+        </>}
+        {view==="directory"&&<><div className="section-top directory-top"><div><p className="eyebrow">ЕДИНАЯ КЛАССИФИКАЦИЯ</p><h1>Справочник отраслей</h1><p>Единые официальные коды и названия ОКВЭД-2 вместо свободных формулировок.</p></div><span className="directory-count">{ready?all.length.toLocaleString("ru-RU"):"21+"} позиций</span></div><div className="directory-hero"><div><h2>Отрасль → класс → подотрасль → вид деятельности</h2><p>Иерархическая навигация, поиск по коду или названию, выбор нужного уровня детализации.</p><button className="button-primary" onClick={openPicker}><Icon name="search" size={17}/> Открыть классификатор <Icon name="right" size={16}/></button></div><div className="directory-flow"><span>A–U</span><i>→</i><span>10</span><i>→</i><span>10.5</span><i>→</i><span>10.51</span></div></div><div className="directory-grid">{SECTIONS.map(([letter,name])=><button key={letter} onClick={()=>{setPicker(true)}}><strong>{letter}</strong><span>{name}</span><Icon name="right" size={16}/></button>)}</div><p className="directory-foot">Источник: <a href={SOURCE_URL} target="_blank" rel="noreferrer">Росстат, ОКВЭД-2, редакция на 01.10.2026</a>. {error?<button onClick={doLoad}>Повторить загрузку кодов</button>:null}</p></>}
+        {view==="about"&&<><div className="section-top directory-top"><div><p className="eyebrow">КОНЦЕПЦИЯ ВНУТРЕННЕГО ПРОДУКТА</p><h1>О M&A Bridge</h1><p>Внутренняя витрина спроса и предложения на корпоративные активы.</p></div></div><div className="about-panel"><div><span className="about-num">01</span><Icon name="layers" size={26}/><h2>Два направления</h2><p>Отдельные вкладки «Купить» и «Продать», одинаковые параметры поиска.</p></div><div><span className="about-num">02</span><Icon name="book" size={26}/><h2>Единые отрасли</h2><p>Стандартизированный ОКВЭД-2, чтобы менеджеры не теряли совпадения из-за разных формулировок.</p></div><div><span className="about-num">03</span><Icon name="sliders" size={26}/><h2>Быстрые фильтры</h2><p>По отраслям, типу актива, географии, сумме, формату сделки и дате размещения.</p></div></div><div className="about-disclaimer"><Icon name="info" size={21}/><div><h3>Ограничения этой версии</h3><p>Прототип не имеет базы данных, авторизации, клиентских заявок и интеграций. Выбранные фильтры существуют только в текущей вкладке браузера.</p></div></div></>}
+      </main>
+    </div>
+    {picker&&<IndustryPicker all={all} loading={loading} error={error} onSelect={item=>{setIndustry(item);setPicker(false);setView("requests")}} onClose={()=>setPicker(false)}/>}
+  </div>;
 }
