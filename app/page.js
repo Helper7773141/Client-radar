@@ -1,62 +1,21 @@
 "use client";
 
-import { useState } from "react";
-
-const DEMO_REQUESTS = {
-  buy: {
-    id: "B-001",
-    status: "Демо",
-    title: "Покупка предприятия пищевой промышленности",
-    description: "Интерес к приобретению действующего производства молочной продукции.",
-    industry: "Обрабатывающие производства",
-    subindustry: "Производство молочной продукции",
-    okved: "10.51",
-    location: "Центральная Россия",
-    amount: "До 3 млрд ₽",
-    deal: "100% компании или контрольная доля",
-    revenue: "От 1 млрд ₽ в год",
-    model: "B2B / B2C",
-    applicant: "Компания (условный пример)",
-    note: "Рассматривается действующее предприятие с устойчивой выручкой и собственной производственной базой."
-  },
-  sell: {
-    id: "S-001",
-    status: "Демо",
-    title: "Продажа завода молочной продукции",
-    description: "Действующее производственное предприятие, продажа бизнеса целиком.",
-    industry: "Обрабатывающие производства",
-    subindustry: "Производство молочной продукции",
-    okved: "10.51",
-    location: "Центральная Россия",
-    amount: "2,5 млрд ₽",
-    deal: "100% компании",
-    revenue: "3 млрд ₽ в год",
-    model: "B2B / B2C",
-    applicant: "Компания (условный пример)",
-    note: "Производственные мощности, готовая продукция и действующие каналы сбыта. Все сведения демонстрационные."
-  }
-};
-
-const DETAIL_FIELDS = [
-  ["Отрасль", "industry"],
-  ["Подотрасль", "subindustry"],
-  ["Код ОКВЭД-2", "okved"],
-  ["География", "location"],
-  ["Бюджет / стоимость", "amount"],
-  ["Тип сделки", "deal"],
-  ["Выручка", "revenue"],
-  ["Бизнес-модель", "model"],
-  ["От кого заявка", "applicant"]
-];
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { DEMO_REQUESTS } from "../lib/demo-requests";
 
 export default function Home() {
   const [tab, setTab] = useState("buy");
-  const [expanded, setExpanded] = useState(false);
   const request = DEMO_REQUESTS[tab];
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "sell") setTab("sell");
+  }, []);
 
   function selectTab(nextTab) {
     setTab(nextTab);
-    setExpanded(false);
+    window.history.replaceState(null, "", nextTab === "sell" ? "/?tab=sell" : "/");
   }
 
   return (
@@ -94,19 +53,13 @@ export default function Home() {
         <div className="section-heading">
           <div>
             <h2>{tab === "buy" ? "Заявки на покупку" : "Заявки на продажу"}</h2>
-            <p>Нажмите на заявку, чтобы посмотреть подробную информацию.</p>
+            <p>Нажмите на заявку, чтобы открыть отдельную страницу с подробностями.</p>
           </div>
           <span className="request-count">1 заявка</span>
         </div>
 
-        <article className={"request " + (expanded ? "request-expanded" : "")}>
-          <button
-            className="request-summary"
-            type="button"
-            aria-expanded={expanded}
-            aria-controls="request-details"
-            onClick={() => setExpanded(value => !value)}
-          >
+        <article className="request">
+          <Link href={"/requests/" + request.id} className="request-summary" aria-label={"Открыть заявку " + request.id + ": " + request.title}>
             <div className="request-main">
               <div className="request-meta">
                 <span className="request-id">№ {request.id}</span>
@@ -131,31 +84,10 @@ export default function Home() {
             </div>
             <span className="request-action" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d={expanded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"}/>
+                <path d="M5 12h14m-6-6 6 6-6 6" />
               </svg>
             </span>
-          </button>
-
-          {expanded && (
-            <div id="request-details" className="details">
-              <div className="details-header">
-                <h4>Подробности заявки</h4>
-                <span>Демонстрационные данные</span>
-              </div>
-              <dl className="details-grid">
-                {DETAIL_FIELDS.map(([label, key]) => (
-                  <div className="detail-item" key={key}>
-                    <dt>{label}</dt>
-                    <dd>{request[key]}</dd>
-                  </div>
-                ))}
-              </dl>
-              <div className="note">
-                <span>Дополнительная информация</span>
-                <p>{request.note}</p>
-              </div>
-            </div>
-          )}
+          </Link>
         </article>
       </section>
 
