@@ -41,7 +41,7 @@ export default function Home(){
  interest+=exposure*rate;
  asv+=type==="dep"?exposure*num(cfg.asv)/100:0;
  reserve+=exposure*num(cfg.reserve)/100*num(cfg.reserveCost)/100;
- const feeRate=(type==="dep"?num(cfg.depPlatform)+num(x.depFee):num(cfg.cfaPlatform)+num(x.cfaFee))/100;
+ const feeRate=(type==="dep"?num(cfg.depPlatform)+num(x.depFee):num(cfg.cfaPlatform)+num(cfg.cfaAnnual)+num(x.cfaFee))/100;
  platform+=exposure*feeRate;
  ops+=exposure*num(type==="dep"?cfg.depOps:cfg.cfaOps)/100;
  asset+=exposure*num(cfg.assetUtil)/100*(num(cfg.assetYield)+(scenario==="stress"?num(cfg.stressYield):0))/100;
