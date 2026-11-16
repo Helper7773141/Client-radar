@@ -1,91 +1,193 @@
 "use client";
-import {useEffect,useMemo,useState} from "react";
-const today="2026-11-15";
-const initial={start:today,months:24,assetYield:17.5,assetUtil:95,asv:0.48,reserve:4.5,reserveCost:14,depPlatform:0.2,cfaPlatform:0.3,cfaSetup:250000,cfaAnnual:0.05,depOps:0.04,cfaOps:0.08,depRunoff:0,cfaRunoff:0,lossRate:0,stressYield:0,stressRunoff:0};
-const cohorts0=[{id:1,date:"2026-12-01",amount:500,months:6,depRate:13.5,cfaRate:13.8,depFee:0,cfaFee:0},{id:2,date:"2027-02-01",amount:350,months:12,depRate:13,cfaRate:13.4,depFee:0,cfaFee:0},{id:3,date:"2027-06-01",amount:250,months:9,depRate:12.5,cfaRate:13,depFee:0,cfaFee:0}];
-const addMonths=(s,n)=>{const [y,m,day]=s.split("-").map(Number);const first=new Date(Date.UTC(y,m-1+Math.trunc(n),1));const last=new Date(Date.UTC(first.getUTCFullYear(),first.getUTCMonth()+1,0)).getUTCDate();first.setUTCDate(Math.min(day,last));return first.toISOString().slice(0,10)};
-const monthKey=s=>s.slice(0,7);
-const money=n=>new Intl.NumberFormat("ru-RU",{maximumFractionDigits:2}).format(Number.isFinite(n)?n:0);
-const pct=n=>money(n)+"%";
-const num=v=>v===""?0:(Number(v)||0);
-const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
-function Input({label,value,onChange,step="0.1",min="0",suffix="",type="number"}){return <label className="field"><span>{label}</span><div className="inputWrap"><input type={type} min={type==="number"?min:undefined} step={step} value={value} onChange={e=>onChange(type==="number"?(e.target.value===""?"":Number(e.target.value)):e.target.value)}/>{suffix&&<small>{suffix}</small>}</div></label>}
-function Metric({name,value,detail,tone}){return <div className={"metric "+(tone||"")}><span>{name}</span><strong>{value}</strong><small>{detail}</small></div>}
-export default function Home(){
- const [tab,setTab]=useState("calculator"),[cfg,setCfg]=useState(initial),[cohorts,setCohorts]=useState(cohorts0),[ready,setReady]=useState(false),[scenario,setScenario]=useState("base");
- useEffect(()=>{try{const saved=JSON.parse(localStorage.getItem("funding-lab-v1")||"null");if(saved){if(saved.cfg)setCfg({...initial,...saved.cfg});if(saved.cohorts)setCohorts(saved.cohorts)}}catch{}setReady(true)},[]);
- useEffect(()=>{if(ready)localStorage.setItem("funding-lab-v1",JSON.stringify({cfg,cohorts}))},[cfg,cohorts,ready]);
- const set=(key,value)=>setCfg(c=>({...c,[key]:value}));
- const update=(id,key,v)=>setCohorts(c=>c.map(x=>x.id===id?{...x,[key]:v}:x));
- const data=useMemo(()=>{
- const safeStart=/^\\d{4}-\\d{2}-\\d{2}$/.test(cfg.start)?cfg.start:today;const start=new Date(safeStart+"T00:00:00Z"),horizon=Math.trunc(clamp(num(cfg.months),1,120)),end=new Date(addMonths(safeStart,horizon)+"T00:00:00Z");
- const rows=[], totals={dep:{interest:0,asv:0,reserve:0,platform:0,ops:0,asset:0,loss:0,balanceDays:0,peak:0},cfa:{interest:0,asv:0,reserve:0,platform:0,ops:0,asset:0,loss:0,balanceDays:0,peak:0}};
- const activeCohorts=cohorts.filter(x=>/^\\d{4}-\\d{2}-\\d{2}$/.test(x.date)&&num(x.amount)>0&&num(x.months)>0);
- const horizonDays=Math.max(1,(end-start)/86400000);
- for(let m=0;m<horizon;m++){
- const mStart=new Date(addMonths(safeStart,m)+"T00:00:00Z"),mEnd=new Date(addMonths(safeStart,m+1)+"T00:00:00Z");
- const entry={month:monthKey(mStart.toISOString()),dep:0,cfa:0,depCost:0,cfaCost:0,depMargin:0,cfaMargin:0,asset:0};
- for(const type of ["dep","cfa"]){
- let interest=0,asv=0,reserve=0,platform=0,ops=0,asset=0,loss=0,balanceDays=0,peak=0;
- for(const x of activeCohorts){
- const orig=new Date(x.date+"T00:00:00Z"),mat=new Date(addMonths(x.date,Math.trunc(num(x.months)))+"T00:00:00Z");
- const from=Math.max(mStart.getTime(),orig.getTime()),to=Math.min(mEnd.getTime(),mat.getTime());
- if(to<=from)continue;
- const days=(to-from)/86400000,amount=num(x.amount)*1e6;
- const runoff=clamp(type==="dep"?num(cfg.depRunoff)+ (scenario==="stress"?num(cfg.stressRunoff):0):num(cfg.cfaRunoff),0,99.99)/100;
- const age=(from-orig.getTime())/86400000;
- const effective=amount*Math.pow(1-runoff,age/365);
- const decay=-Math.log(1-runoff)*days/365;const avg=effective*(decay>1e-10?-Math.expm1(-decay)/decay:1);
- const exposure=avg*days/365;
- const rate=num(type==="dep"?x.depRate:x.cfaRate)/100;
- interest+=exposure*rate;
- asv+=type==="dep"?exposure*num(cfg.asv)/100:0;
- reserve+=exposure*num(cfg.reserve)/100*num(cfg.reserveCost)/100;
- const feeRate=(type==="dep"?num(cfg.depPlatform)+num(x.depFee):num(cfg.cfaPlatform)+num(cfg.cfaAnnual)+num(x.cfaFee))/100;
- platform+=exposure*feeRate;
- ops+=exposure*num(type==="dep"?cfg.depOps:cfg.cfaOps)/100;
- asset+=exposure*num(cfg.assetUtil)/100*(num(cfg.assetYield)+(scenario==="stress"?num(cfg.stressYield):0))/100;
- loss+=exposure*num(cfg.lossRate)/100;
- balanceDays+=avg*days;peak+=effective;
- }
- const total=totals[type];for(const [k,v] of Object.entries({interest,asv,reserve,platform,ops,asset,loss,balanceDays}))total[k]+=v;total.peak=Math.max(total.peak,peak);
- const cost=interest+asv+reserve+platform+ops+(type==="cfa"&&m===0&&activeCohorts.length>0?num(cfg.cfaSetup):0);
- const margin=asset-loss-cost;
- entry[type]=balanceDays/((mEnd-mStart)/86400000)/1e6;entry[type+"Cost"]=cost/1e6;entry[type+"Margin"]=margin/1e6;
- if(type==="cfa")entry.asset=asset/1e6;
- }
- rows.push(entry);
- }
- const summary={};
- for(const type of ["dep","cfa"]){
- const t=totals[type],setup=type==="cfa"&&activeCohorts.length>0?num(cfg.cfaSetup):0,expenses=t.interest+t.asv+t.reserve+t.platform+t.ops+setup;
- summary[type]={...t,setup,expenses,margin:t.asset-t.loss-expenses,avgBalance:t.balanceDays/horizonDays,weightedCost:t.balanceDays>0?expenses/t.balanceDays*365*100:0,marginRate:t.balanceDays>0?(t.asset-t.loss-expenses)/t.balanceDays*365*100:0};
- }
- return {rows,summary,volume:activeCohorts.reduce((s,x)=>s+num(x.amount),0),horizonDays};
- },[cfg,cohorts,scenario]);
- const dep=data.summary.dep,cfa=data.summary.cfa,diff=cfa.margin-dep.margin;
- const exportCsv=()=>{const head="Месяц;Остаток вклада млн;Остаток ЦФА млн;Расход вклада млн;Расход ЦФА млн;Маржа вклада млн;Маржа ЦФА млн";const lines=data.rows.map(r=>[r.month,r.dep,r.cfa,r.depCost,r.cfaCost,r.depMargin,r.cfaMargin].join(";"));const blob=new Blob(["\uFEFF"+[head,...lines].join("\n")],{type:"text/csv;charset=utf-8"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="expobank-funding-model.csv";a.click();URL.revokeObjectURL(url)};
- const reset=()=>{if(window.confirm("Сбросить все параметры к демонстрационным?")){setCfg(initial);setCohorts(cohorts0);setScenario("base")}};
- const row=(x)=><tr key={x.id}><td><input aria-label="Дата привлечения" type="date" value={x.date} onChange={e=>update(x.id,"date",e.target.value)}/></td><td><input aria-label="Объем, млн" type="number" min="0" step="10" value={x.amount} onChange={e=>update(x.id,"amount",e.target.value===""?"":Number(e.target.value))}/></td><td><input aria-label="Срок, мес" type="number" min="1" max="120" value={x.months} onChange={e=>update(x.id,"months",e.target.value===""?"":Math.max(0,Math.trunc(Number(e.target.value))))}/></td><td><input aria-label="Ставка вклада" type="number" min="0" step=".1" value={x.depRate} onChange={e=>update(x.id,"depRate",e.target.value===""?"":Number(e.target.value))}/></td><td><input aria-label="Ставка ЦФА" type="number" min="0" step=".1" value={x.cfaRate} onChange={e=>update(x.id,"cfaRate",e.target.value===""?"":Number(e.target.value))}/></td><td><input aria-label="Доп комиссия вклада, %" type="number" step=".05" value={x.depFee??0} onChange={e=>update(x.id,"depFee",e.target.value===""?"":Number(e.target.value))}/></td><td><input aria-label="Доп комиссия ЦФА, %" type="number" step=".05" value={x.cfaFee??0} onChange={e=>update(x.id,"cfaFee",e.target.value===""?"":Number(e.target.value))}/></td><td><button className="remove" onClick={()=>setCohorts(v=>v.filter(a=>a.id!==x.id))}>×</button></td></tr>;
- const configFields=(fields)=>fields.map(([key,label,step,suffix])=><Input key={key} label={label} value={cfg[key]} onChange={v=>set(key,v)} step={step||"0.1"} suffix={suffix||"%"}/>);
- return <main className="shell"><header className="top"><div><div className="eyebrow">EXPOBANK · TREASURY & RISK ANALYTICS</div><h1>Funding Lab <span> / Вклад vs ЦФА</span></h1><p>Сценарная модель стоимости привлечения, ликвидности и процентной маржи</p></div><div className="actions"><button onClick={exportCsv}>↓ Экспорт CSV</button><button onClick={reset}>Сбросить</button></div></header>
- <div className="notice"><b>Модель, не фактический P&L.</b> Все ставки и комиссии — редактируемые допущения. «Доход» означает условный процентный доход от размещения привлеченных средств, а «маржа» — доход минус стоимость фондирования, резерва, кредитные потери и заданные расходы. Не учтены налоги, капитал, нормативы ликвидности и детальная методика ФОР.</div>
- <nav className="tabs">{[["calculator","Калькулятор"],["overview","Аналитика"],["flows","Транши и сроки"],["deposit","Вклад"],["cfa","ЦФА"],["risk","Риски и стресс"],["monthly","Помесячный расчет"]].map(([k,t])=><button key={k} className={tab===k?"active":""} onClick={()=>setTab(k)}>{t}</button>)}</nav>
- <section className="main">
- {tab==="calculator"&&<><div className="sectionHead"><div><h2>Калькулятор стоимости фондирования</h2><p>Меняй параметры — все суммы и результаты пересчитываются сразу.</p></div><div className="switch"><button className={scenario==="base"?"selected":""} onClick={()=>setScenario("base")}>Базовый</button><button className={scenario==="stress"?"selected":""} onClick={()=>setScenario("stress")}>Стресс</button></div></div>
- <div className="metrics"><Metric name="Привлекаем" value={money(data.volume)+" млн ₽"} detail="сумма всех траншей"/><Metric name="Стоимость вклада" value={pct(dep.weightedCost)} detail="эффективно годовых"/><Metric name="Стоимость ЦФА" value={pct(cfa.weightedCost)} detail="эффективно годовых"/><Metric name="Экономия на ЦФА" value={money((dep.expenses-cfa.expenses)/1e6)+" млн ₽"} detail="разница совокупных расходов" tone={dep.expenses>=cfa.expenses?"positive":"negative"}/></div>
- <div className="two"><article className="panel"><h3>1. Вклад</h3><div className="fields single">{configFields([["asv","АСВ, % в год"],["depPlatform","Комиссия платформы, % в год"],["depOps","Операционные расходы, % в год"],["depRunoff","Досрочный отток, % в год"]])}</div><dl><div><dt>Проценты</dt><dd>{money(dep.interest/1e6)} млн ₽</dd></div><div><dt>АСВ</dt><dd>{money(dep.asv/1e6)} млн ₽</dd></div><div><dt>ФОР (стоимость)</dt><dd>{money(dep.reserve/1e6)} млн ₽</dd></div><div><dt>Все расходы</dt><dd>{money(dep.expenses/1e6)} млн ₽</dd></div><div><dt>Маржа</dt><dd>{money(dep.margin/1e6)} млн ₽</dd></div></dl></article>
- <article className="panel"><h3>2. ЦФА</h3><div className="fields single">{configFields([["cfaPlatform","Комиссия платформы, % в год"],["cfaAnnual","Обслуживание выпуска, % в год"],["cfaOps","Операционные расходы, % в год"],["cfaRunoff","Досрочный выкуп, % в год"]])}<Input label="Запуск выпуска, ₽" value={cfg.cfaSetup} onChange={v=>set("cfaSetup",v)} step="10000" suffix="₽"/></div><dl><div><dt>Выплаты инвесторам</dt><dd>{money(cfa.interest/1e6)} млн ₽</dd></div><div><dt>АСВ</dt><dd>0 ₽</dd></div><div><dt>ФОР (стоимость)</dt><dd>{money(cfa.reserve/1e6)} млн ₽</dd></div><div><dt>Все расходы</dt><dd>{money(cfa.expenses/1e6)} млн ₽</dd></div><div><dt>Маржа</dt><dd>{money(cfa.margin/1e6)} млн ₽</dd></div></dl></article></div>
- <article className="panel"><div className="sectionHead"><div><h3>3. Суммы, даты, сроки и ставки</h3><p>Добавляй сколько угодно периодов привлечения.</p></div><button className="primary" onClick={()=>setCohorts(v=>[...v,{id:Math.max(0,...v.map(x=>x.id))+1,date:cfg.start,amount:100,months:12,depRate:13,cfaRate:13.4,depFee:0,cfaFee:0}])}>+ Добавить период</button></div><div className="tableScroll"><table><thead><tr><th>Дата</th><th>Сумма, млн ₽</th><th>Срок, мес.</th><th>Вклад, %</th><th>ЦФА, %</th><th>Комиссия вклада, %</th><th>Комиссия ЦФА, %</th><th></th></tr></thead><tbody>{cohorts.map(row)}</tbody></table></div></article>
- <article className="panel"><h3>4. Общие допущения</h3><div className="fields">{configFields([["assetYield","Доходность активов, %"],["assetUtil","Использование средств, %"],["reserve","ФОР, норматив %"],["reserveCost","Стоимость ФОР, %"],["lossRate","Кредитные потери, %"]])}<Input type="date" label="Начало расчета" value={cfg.start} onChange={v=>set("start",v)}/><Input label="Горизонт расчета" value={cfg.months} onChange={v=>set("months",clamp(v,1,120))} step="1" suffix="мес."/></div></article>
- <div className="result"><div><span>Результат: ЦФА относительно вклада</span><strong>{diff>=0?"+":""}{money(diff/1e6)} млн ₽</strong><small>Разница расчетной маржи за выбранный горизонт</small></div><div><span>Расходы на вклад</span><b>{money(dep.expenses/1e6)} млн ₽</b><span>Расходы на ЦФА</span><b>{money(cfa.expenses/1e6)} млн ₽</b></div></div>
- <p className="fineprint">ФОР отражен как оценка стоимости резервирования, не как взнос. Досрочный отток упрощен; нет пересчета процентов при расторжении, нормативов ликвидности и капитала. Все исходные ставки — модельные.</p></>}
 
- {tab==="overview"&&<><div className="sectionHead"><div><h2>Экономика фондирования</h2><p>Суммарный результат за расчетный горизонт · {cfg.months} мес.</p></div><div className="switch"><button className={scenario==="base"?"selected":""} onClick={()=>setScenario("base")}>База</button><button className={scenario==="stress"?"selected":""} onClick={()=>setScenario("stress")}>Стресс</button></div></div><div className="metrics"><Metric name="Объем привлечения" value={money(data.volume)+" млн ₽"} detail={cohorts.length+" траншей"}/><Metric name="Средняя стоимость вклада" value={pct(dep.weightedCost)} detail="все заданные расходы, годовых"/><Metric name="Средняя стоимость ЦФА" value={pct(cfa.weightedCost)} detail="включая запуск и обслуживание"/><Metric name="Разница маржи ЦФА − вклад" value={money(diff/1e6)+" млн ₽"} detail={diff>=0?"ЦФА выгоднее в модели":"Вклад выгоднее в модели"} tone={diff>=0?"positive":"negative"}/></div><div className="two"><article className="panel"><h3>Вклад</h3><div className="big">{money(dep.margin/1e6)} <small>млн ₽</small></div><p>Расчетная маржа за горизонт</p><dl><div><dt>Проценты клиентам</dt><dd>{money(dep.interest/1e6)} млн</dd></div><div><dt>АСВ</dt><dd>{money(dep.asv/1e6)} млн</dd></div><div><dt>Стоимость ФОР</dt><dd>{money(dep.reserve/1e6)} млн</dd></div><div><dt>Платформа + операции</dt><dd>{money((dep.platform+dep.ops)/1e6)} млн</dd></div><div><dt>Доход от активов</dt><dd>{money(dep.asset/1e6)} млн</dd></div></dl></article><article className="panel"><h3>ЦФА</h3><div className="big">{money(cfa.margin/1e6)} <small>млн ₽</small></div><p>Расчетная маржа за горизонт</p><dl><div><dt>Выплаты инвесторам</dt><dd>{money(cfa.interest/1e6)} млн</dd></div><div><dt>АСВ</dt><dd>0 млн</dd></div><div><dt>Стоимость ФОР</dt><dd>{money(cfa.reserve/1e6)} млн</dd></div><div><dt>Платформа + операции + запуск</dt><dd>{money((cfa.platform+cfa.ops+cfa.setup)/1e6)} млн</dd></div><div><dt>Доход от активов</dt><dd>{money(cfa.asset/1e6)} млн</dd></div></dl></article></div><article className="panel"><h3>Динамика остатков по месяцам, млн ₽</h3><div className="bars">{data.rows.map((r,i)=><div key={i} className="barGroup" title={r.month+" · вклад "+money(r.dep)+" · ЦФА "+money(r.cfa)}><div className="bar dep" style={{height:(r.dep/Math.max(1,...data.rows.map(x=>x.dep))*100)+"%"}}/><div className="bar cfa" style={{height:(r.cfa/Math.max(1,...data.rows.map(x=>x.cfa))*100)+"%"}}/></div>)}</div><div className="legend"><span>■ Вклад</span><span>■ ЦФА</span><small>Наведите на столбец для значений</small></div></article></>}
- {tab==="flows"&&<><div className="sectionHead"><div><h2>График привлечения</h2><p>Добавляйте транши с разными датами, сроками, суммами и ставками. В расчет включаются только дни внутри горизонта.</p></div><button className="primary" onClick={()=>setCohorts(v=>[...v,{id:Math.max(0,...v.map(x=>x.id))+1,date:cfg.start,amount:100,months:12,depRate:13,cfaRate:13.4,depFee:0,cfaFee:0}])}>+ Добавить транш</button></div><div className="panel tableScroll"><table><thead><tr><th>Дата</th><th>Объем, млн ₽</th><th>Срок, мес.</th><th>Вклад, %</th><th>ЦФА, %</th><th>Комиссия вклада, %</th><th>Комиссия ЦФА, %</th><th></th></tr></thead><tbody>{cohorts.map(row)}</tbody><tfoot><tr><td>Всего</td><td>{money(data.volume)}</td><td colSpan="6">млн ₽ заявленного привлечения</td></tr></tfoot></table></div><div className="panel"><h3>Горизонт модели</h3><div className="fields"><Input type="date" label="Начало расчета" value={cfg.start} onChange={v=>set("start",v)}/><Input label="Горизонт, месяцев" value={cfg.months} onChange={v=>set("months",clamp(v,1,120))} step="1" suffix="мес."/></div></div></>}
- {tab==="deposit"&&<><h2>Параметры вклада</h2><p className="intro">Ставки и объемы задаются для каждого транша во вкладке «Транши и сроки».</p><div className="panel"><div className="fields">{configFields([["asv","Взносы АСВ, годовых"],["depPlatform","Комиссия витрины, эквивалент годовых"],["depOps","Операционные расходы, годовых"],["depRunoff","Досрочный отток, годовых"]])}</div></div><div className="notice">Досрочный отток здесь моделируется как постепенное сокращение остатка; пересчет процентов при фактическом досрочном расторжении не моделируется. Комиссии платформы заданы как процент от среднего остатка за год, а не как разовый тариф за привлечение.</div><div className="metrics"><Metric name="Процентные расходы" value={money(dep.interest/1e6)+" млн ₽"}/><Metric name="АСВ" value={money(dep.asv/1e6)+" млн ₽"}/><Metric name="Платформа" value={money(dep.platform/1e6)+" млн ₽"}/><Metric name="Маржа" value={money(dep.margin/1e6)+" млн ₽"}/></div></>}
- {tab==="cfa"&&<><h2>Параметры ЦФА</h2><p className="intro">Отдельная экономика выпуска: ставка каждого транша, инфраструктура, отсутствие АСВ и ликвидность.</p><div className="panel"><div className="fields">{configFields([["cfaPlatform","Комиссия платформы, годовых"],["cfaAnnual","Доп. комиссия, годовых"],["cfaOps","Операционные расходы, годовых"],["cfaRunoff","Досрочное погашение/выкуп, годовых"]])}<Input label="Разовые затраты на запуск, ₽" value={cfg.cfaSetup} onChange={v=>set("cfaSetup",v)} step="10000" suffix="₽"/></div></div><div className="notice"><b>Регуляторные ограничения:</b> лимит для неквалифицированных инвесторов зависит от структуры ЦФА, рейтинга обязанного лица и актуальных требований Банка России. В модели не заложено автоматическое право инвестора на досрочный возврат. Значение «досрочное погашение» используется только если это разрешено условиями выпуска.</div><div className="metrics"><Metric name="Выплаты инвесторам" value={money(cfa.interest/1e6)+" млн ₽"}/><Metric name="АСВ" value="0 ₽"/><Metric name="Инфраструктура и запуск" value={money((cfa.platform+cfa.ops+cfa.setup)/1e6)+" млн ₽"}/><Metric name="Маржа" value={money(cfa.margin/1e6)+" млн ₽"}/></div></>}
- {tab==="risk"&&<><h2>Риски, ФОР и стресс-параметры</h2><div className="panel"><h3>Общие параметры</h3><div className="fields">{configFields([["assetYield","Доходность размещения средств, годовых"],["assetUtil","Доля средств, размещенная в доходные активы"],["reserve","Норматив резервирования ФОР"],["reserveCost","Альтернативная стоимость ФОР, годовых"],["lossRate","Ожидаемые кредитные потери, годовых"]])}</div></div><div className="panel"><h3>Стресс-сценарий</h3><div className="fields">{configFields([["stressYield","Изменение доходности активов, п. п.","0.1","п. п."],["stressRunoff","Дополнительный отток вкладов, п. п.","1","п. п."]])}</div><div className="switch"><button className={scenario==="base"?"selected":""} onClick={()=>setScenario("base")}>Базовый расчет</button><button className={scenario==="stress"?"selected":""} onClick={()=>setScenario("stress")}>Применить стресс</button></div></div><div className="notice">ФОР: в модели показана <b>стоимость отвлеченной ликвидности</b> = средний остаток × норматив × альтернативная ставка × доля года. Это упрощение, не расчет фактических обязательных резервов по методике Банка России. Стресс оттока влияет на объем и маржу, но не на потребность в ликвидных активах или нормативы Н2/Н3/Н4.</div></>}
- {tab==="monthly"&&<><div className="sectionHead"><div><h2>Помесячный расчет</h2><p>Все значения в млн ₽. Остаток — средний за месяц, расходы и маржа — за месяц.</p></div><button onClick={exportCsv}>↓ Скачать CSV</button></div><div className="panel tableScroll"><table><thead><tr><th>Месяц</th><th>Вклад: остаток</th><th>ЦФА: остаток</th><th>Вклад: расход</th><th>ЦФА: расход</th><th>Вклад: маржа</th><th>ЦФА: маржа</th></tr></thead><tbody>{data.rows.map(r=><tr key={r.month}><td>{r.month}</td>{["dep","cfa","depCost","cfaCost","depMargin","cfaMargin"].map(k=><td key={k}>{money(r[k])}</td>)}</tr>)}</tbody></table></div></>}
- </section><footer>Funding Lab · Демонстрационная аналитическая модель · Параметры сохраняются локально в браузере. Проверяйте тарифы, учет и регуляторные нормативы перед принятием решений.</footer></main>
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { DEMO_REQUESTS, KINDS, INDUSTRIES, REGIONS, LABELS, formatMoney, formatDate } from "../lib/requests";
+
+function Icon({ name, size = 18 }) {
+  const paths = {
+    search:"M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
+    menu:"M4 6h16 M4 12h16 M4 18h16",
+    close:"M18 6 6 18 M6 6l12 12",
+    chevron:"m9 18 6-6-6-6",
+    right:"M5 12h14m-6-6 6 6-6 6",
+    user:"M20 21a8 8 0 0 0-16 0 M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10z",
+    archive:"M4 4h16v5H4z M6 9v12h12V9 M10 13h4",
+    grid:"M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z",
+    filter:"M4 7h16 M7 12h10 M10 17h4",
+    shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+    check:"m5 12 4 4L19 6",
+    info:"M12 17v-5 M12 8h.01 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
+    clock:"M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2",
+    sort:"M8 3v18m0 0-4-4m4 4 4-4 M16 21V3m0 0-4 4m4-4 4 4"
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.info}/></svg>;
+}
+const emptyFilters={query:"",kind:"",industry:"",region:"",min:"",max:"",date:"",sort:"new"};
+function Select({label,value,onChange,options,empty="Все"}) {
+  return <label className="filter-control"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">{empty}</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></label>;
+}
+function Badge({status}) {
+  return <span className={"status status-"+status}>{status==="realized"&&<Icon name="check" size={13}/>} {LABELS[status]}</span>;
+}
+function RequestRow({request,view}) {
+  const from = view==="mine" ? "mine" : view==="archive" ? "archive" : "catalog";
+  const url = "/requests/" + encodeURIComponent(request.id) + "?from=" + from;
+  return <Link href={url} className={"request-row "+(view==="mine"?"request-row-owned":"")}>
+    <div className="request-main">
+      <div className="request-kicker"><span className="category-label">{request.category}</span><span>{request.id}</span>{view!=="catalog"&&<Badge status={request.status}/>}</div>
+      <strong className="request-title">{request.title}</strong>
+      <p>{request.summary}</p>
+      {view==="mine"&&<div className="private-preview"><div><b>Клиент</b><span>{request.client}</span></div><div><b>Точный адрес</b><span>{request.address}</span></div></div>}
+    </div>
+    <div className="request-column"><small>География</small><span>{request.regions.join(" / ")}</span></div>
+    <div className="request-column request-amount"><small>Стоимость</small><strong>{formatMoney(request.priceMin)===formatMoney(request.priceMax)?formatMoney(request.priceMin):formatMoney(request.priceMin)+" — "+formatMoney(request.priceMax)}</strong></div>
+    <div className="request-column request-date"><small>{view==="archive"?"Закрыта":"Размещена"}</small><span>{formatDate(view==="archive"?request.closedDate:request.date)}</span><em>{request.unit}</em></div>
+    <div className="request-arrow"><Icon name="right" size={19}/></div>
+  </Link>;
+}
+
+export default function Home() {
+  const [view,setView]=useState("catalog");
+  const [direction,setDirection]=useState("buy");
+  const [menuOpen,setMenuOpen]=useState(false);
+  const [filters,setFilters]=useState(emptyFilters);
+  const [moreFilters,setMoreFilters]=useState(false);
+  const [archiveStatus,setArchiveStatus]=useState("all");
+  const [onlyDirection,setOnlyDirection]=useState("all");
+
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const nextView=params.get("view");
+    const nextTab=params.get("tab");
+    if(["catalog","mine","archive"].includes(nextView))setView(nextView);
+    if(["buy","sell"].includes(nextTab))setDirection(nextTab);
+    function onKey(e){if(e.key==="Escape")setMenuOpen(false);}
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[]);
+  const go=(next,tab)=>{
+    const dir=tab||direction;
+    setView(next);setDirection(dir);setMenuOpen(false);
+    setFilters(emptyFilters);setArchiveStatus("all");setOnlyDirection("all");setMoreFilters(false);
+    const q=new URLSearchParams();
+    if(next!=="catalog")q.set("view",next);
+    if(dir==="sell"&&next==="catalog")q.set("tab","sell");
+    window.history.replaceState(null,"","/"+(q.size?"?"+q.toString():""));
+  };
+  const setF=(k,v)=>setFilters(s=>({...s,[k]:v}));
+  const hasFilter=Object.entries(filters).some(([k,v])=>k!=="sort"&&v!=="");
+  const allForView=useMemo(()=>{
+    if(view==="catalog")return DEMO_REQUESTS.filter(r=>r.status==="active"&&r.direction===direction);
+    if(view==="mine")return DEMO_REQUESTS.filter(r=>r.owned);
+    return DEMO_REQUESTS.filter(r=>r.status!=="active");
+  },[view,direction]);
+  const matches=useMemo(()=>{
+    if(filters.min!==""&&filters.max!==""&&Number(filters.min)>Number(filters.max))return [];
+    return allForView.filter(r=>{
+      if(view==="archive"&&archiveStatus!=="all"&&r.status!==archiveStatus)return false;
+      if(view!=="catalog"&&onlyDirection!=="all"&&r.direction!==onlyDirection)return false;
+      if(filters.kind&&r.category!==filters.kind)return false;
+      if(filters.industry&&r.industry!==filters.industry)return false;
+      if(filters.region&&!r.regions.includes(filters.region))return false;
+      if(filters.min!==""&&r.priceMax<Number(filters.min))return false;
+      if(filters.max!==""&&r.priceMin>Number(filters.max))return false;
+      if(filters.date){
+        const days=Number(filters.date);
+        const ref=new Date("2026-11-16T12:00:00Z").getTime();
+        if((ref-new Date(r.date+"T12:00:00Z").getTime())/86400000>days)return false;
+      }
+      if(filters.query.trim()){
+        const needle=filters.query.toLocaleLowerCase("ru").replace(/ё/g,"е").trim();
+        const publicText=[r.title,r.id,r.summary,r.category,r.industry,r.subindustry,r.okved,r.notes,r.unit,...r.regions].join(" ");
+        const searchText=view==="mine"?publicText+" "+r.client+" "+r.address:publicText;
+        const hay=searchText.toLocaleLowerCase("ru").replace(/ё/g,"е");
+        if(!needle.split(/\s+/).every(part=>hay.includes(part)))return false;
+      }
+      return true;
+    }).sort((a,b)=>{
+      if(filters.sort==="old")return a.date.localeCompare(b.date);
+      if(filters.sort==="priceAsc")return a.priceMin-b.priceMin;
+      if(filters.sort==="priceDesc")return b.priceMax-a.priceMax;
+      return b.date.localeCompare(a.date);
+    });
+  },[view,allForView,filters,archiveStatus,onlyDirection]);
+  const title=view==="catalog"?(direction==="buy"?"Заявки на покупку":"Заявки на продажу"):view==="archive"?"Архив заявок":"Мои заявки";
+  const subtitle=view==="catalog"?"Поиск встречного спроса и предложения по активам.":view==="archive"?"Завершённые сделки и заявки, закрытые без реализации.":"Заявки демо-менеджера. Здесь дополнительно видны клиент и точный адрес.";
+  const mineCount=DEMO_REQUESTS.filter(r=>r.owned).length;
+  const archive=DEMO_REQUESTS.filter(r=>r.status!=="active");
+  const stats=view==="archive"?
+    <div className="archive-stats"><span className="stat-item"><i className="stat-dot green"/>Реализованы <b>{archive.filter(r=>r.status==="realized").length}</b></span><span className="stat-item"><i className="stat-dot grey"/>Закрыты <b>{archive.filter(r=>r.status==="closed").length}</b></span></div>
+  :null;
+  return <div className="app">
+    <header className="topbar">
+      <div className="topbar-inner">
+        <div className="brand"><button type="button" className="brand-button" onClick={()=>go("catalog","buy")}>M&A Bridge</button><span className="site-demo">Демо</span></div>
+        <div className="header-actions">
+          <span className="demo-person"><span className="demo-avatar">ДМ</span> Демо-менеджер</span>
+          <button type="button" className={"sections-button "+(menuOpen?"sections-active":"")} onClick={()=>setMenuOpen(x=>!x)} aria-expanded={menuOpen} aria-controls="sections-menu"><Icon name="menu" size={19}/> Разделы</button>
+        </div>
+      </div>
+    </header>
+
+    <div className="body-container">
+      <div className="top-nav">
+        <div className="direction-tabs" role="tablist" aria-label="Покупка или продажа">
+          <button role="tab" aria-selected={view==="catalog"&&direction==="buy"} className={view==="catalog"&&direction==="buy"?"tab selected": "tab"} onClick={()=>go("catalog","buy")}>Купить <span>{DEMO_REQUESTS.filter(r=>r.status==="active"&&r.direction==="buy").length}</span></button>
+          <button role="tab" aria-selected={view==="catalog"&&direction==="sell"} className={view==="catalog"&&direction==="sell"?"tab selected": "tab"} onClick={()=>go("catalog","sell")}>Продать <span>{DEMO_REQUESTS.filter(r=>r.status==="active"&&r.direction==="sell").length}</span></button>
+        </div>
+        <div className="nav-links">
+          <button className={view==="mine"?"sub-nav active":"sub-nav"} onClick={()=>go("mine")}><Icon name="user" size={16}/> Мои заявки <span>{mineCount}</span></button>
+          <button className={view==="archive"?"sub-nav active":"sub-nav"} onClick={()=>go("archive")}><Icon name="archive" size={16}/> Архив <span>{archive.length}</span></button>
+        </div>
+      </div>
+
+      <main>
+        <div className="section-heading">
+          <div><div className="section-kicker">КАТАЛОГ ЗАЯВОК / {view==="catalog"?"АКТИВНЫЕ":view==="mine"?"МОЙ КАБИНЕТ":"АРХИВ"}</div><h1>{title}</h1><p>{subtitle}</p></div>
+          <div className="heading-side"><span className="result-count">{matches.length} из {allForView.length}</span>{stats}</div>
+        </div>
+
+        {view==="mine"&&<div className="note-privacy"><Icon name="shield" size={18}/><div><strong>Внутренние поля: клиент и адрес</strong><p>В этом демонстрационном разделе они видны только для «моих» заявок. В общем каталоге и архиве других менеджеров эти данные скрыты. В реальной системе права потребуется проверять на сервере.</p></div></div>}
+
+        {view==="archive"&&<div className="archive-tabs" role="group" aria-label="Статусы архива">
+          {[["all","Все"],["realized","Реализованы"],["closed","Закрыты"]].map(([key,label])=><button key={key} className={archiveStatus===key?"archive-tab current":"archive-tab"} onClick={()=>setArchiveStatus(key)}>{key==="realized"&&<span className="mini-dot green"/>}{key==="closed"&&<span className="mini-dot grey"/>}{label}</button>)}
+        </div>}
+
+        <div className="filters-box">
+          <div className="searchbar">
+            <div className="searchinput"><Icon name="search"/><input value={filters.query} onChange={e=>setF("query",e.target.value)} placeholder={view==="mine"?"Поиск по заявкам, клиенту или адресу…":"Поиск по названию, отрасли или региону…"} aria-label="Поиск заявок"/></div>
+            {view!=="catalog"&&<label className="direction-select"><span>Тип:</span><select value={onlyDirection} onChange={e=>setOnlyDirection(e.target.value)}><option value="all">Все направления</option><option value="buy">Покупка</option><option value="sell">Продажа</option></select></label>}
+            <button className={"filter-toggle "+(moreFilters?"on":"")} onClick={()=>setMoreFilters(x=>!x)} aria-expanded={moreFilters}><Icon name="filter" size={17}/> Фильтры <Icon name="chevron" size={15}/></button>
+            {hasFilter&&<button className="reset-button" onClick={()=>setFilters(emptyFilters)}>Сбросить</button>}
+          </div>
+          {moreFilters&&<div className="filters-grid">
+            <Select label="Тип актива" value={filters.kind} onChange={v=>setF("kind",v)} options={KINDS}/>
+            <Select label="Отрасль" value={filters.industry} onChange={v=>setF("industry",v)} options={INDUSTRIES}/>
+            <Select label="География" value={filters.region} onChange={v=>setF("region",v)} options={REGIONS}/>
+            <label className="filter-control"><span>Стоимость от, млн ₽</span><input type="number" min="0" value={filters.min} placeholder="Любая" onChange={e=>setF("min",e.target.value)}/></label>
+            <label className="filter-control"><span>Стоимость до, млн ₽</span><input type="number" min="0" value={filters.max} placeholder="Любая" onChange={e=>setF("max",e.target.value)}/></label>
+            <Select label="Дата размещения" value={filters.date} onChange={v=>setF("date",v)} options={["7","30","90"]} empty="За всё время"/>
+            <label className="filter-control"><span>Сортировка</span><select value={filters.sort} onChange={e=>setF("sort",e.target.value)}><option value="new">Сначала новые</option><option value="old">Сначала старые</option><option value="priceAsc">Сначала дешёвые</option><option value="priceDesc">Сначала дорогие</option></select></label>
+          </div>}
+          {filters.min!==""&&filters.max!==""&&Number(filters.min)>Number(filters.max)&&<p className="input-warning">Минимальная стоимость больше максимальной — результаты не найдены.</p>}
+        </div>
+
+        <div className="results-container">
+          <div className="table-header"><span>ЗАЯВКА / ОПИСАНИЕ</span><span>ГЕОГРАФИЯ</span><span>СТОИМОСТЬ</span><span>РАЗМЕЩЕНА</span><span/></div>
+          {matches.length?matches.map(r=><RequestRow key={r.id} request={r} view={view}/>):<div className="empty-results"><div className="empty-icon"><Icon name="search" size={25}/></div><strong>Заявки не найдены</strong><p>Измени параметры фильтрации или сбрось фильтры.</p><button onClick={()=>{setFilters(emptyFilters);setArchiveStatus("all");setOnlyDirection("all");}}>Сбросить фильтры</button></div>}
+        </div>
+        <p className="footnote">Все заявки, клиенты и адреса — вымышленные примеры. Нет авторизации, базы данных и сохранения изменений. Дата демонстрационного набора: 16.11.2026.</p>
+      </main>
+    </div>
+
+    {menuOpen&&<div className="drawer-cover" onMouseDown={e=>{if(e.target===e.currentTarget)setMenuOpen(false)}}>
+      <aside id="sections-menu" className="drawer" aria-label="Дополнительные разделы">
+        <div className="drawer-header"><strong>Разделы</strong><button onClick={()=>setMenuOpen(false)} aria-label="Закрыть меню"><Icon name="close"/></button></div>
+        <button className="drawer-link" onClick={()=>go("mine")}><span className="drawer-icon"><Icon name="user" size={20}/></span><span><strong>Мои заявки</strong><small>Мои запросы, клиент и точный адрес</small></span><em>{mineCount}</em><Icon name="right" size={17}/></button>
+        <button className="drawer-link" onClick={()=>go("archive")}><span className="drawer-icon"><Icon name="archive" size={20}/></span><span><strong>Архив заявок</strong><small>Реализованные и просто закрытые</small></span><em>{archive.length}</em><Icon name="right" size={17}/></button>
+        <p className="drawer-caption">Демонстрация механики M&A Bridge. Данные вымышлены и не сохраняются.</p>
+      </aside>
+    </div>}
+  </div>;
 }
