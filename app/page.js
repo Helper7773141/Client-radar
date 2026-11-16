@@ -122,10 +122,12 @@ export default function Home() {
   return <div className="app">
     <header className="topbar">
       <div className="topbar-inner">
-        <div className="brand"><button type="button" className="brand-button" onClick={()=>go("catalog","buy")}>M&A Bridge</button><span className="site-demo">Демо</span></div>
+        <div className="header-left">
+          <button type="button" className={"sections-button "+(menuOpen?"sections-active":"")} onClick={()=>setMenuOpen(x=>!x)} aria-expanded={menuOpen} aria-controls="sections-menu"><Icon name="menu" size={19}/> Разделы</button>
+          <div className="brand"><button type="button" className="brand-button" onClick={()=>go("catalog","buy")}>M&A Bridge</button><span className="site-demo">Демо</span></div>
+        </div>
         <div className="header-actions">
           <span className="demo-person"><span className="demo-avatar">ДМ</span> Демо-менеджер</span>
-          <button type="button" className={"sections-button "+(menuOpen?"sections-active":"")} onClick={()=>setMenuOpen(x=>!x)} aria-expanded={menuOpen} aria-controls="sections-menu"><Icon name="menu" size={19}/> Разделы</button>
         </div>
       </div>
     </header>
@@ -135,10 +137,6 @@ export default function Home() {
         <div className="direction-tabs" role="tablist" aria-label="Покупка или продажа">
           <button role="tab" aria-selected={view==="catalog"&&direction==="buy"} className={view==="catalog"&&direction==="buy"?"tab selected": "tab"} onClick={()=>go("catalog","buy")}>Купить <span>{DEMO_REQUESTS.filter(r=>r.status==="active"&&r.direction==="buy").length}</span></button>
           <button role="tab" aria-selected={view==="catalog"&&direction==="sell"} className={view==="catalog"&&direction==="sell"?"tab selected": "tab"} onClick={()=>go("catalog","sell")}>Продать <span>{DEMO_REQUESTS.filter(r=>r.status==="active"&&r.direction==="sell").length}</span></button>
-        </div>
-        <div className="nav-links">
-          <button className={view==="mine"?"sub-nav active":"sub-nav"} onClick={()=>go("mine")}><Icon name="user" size={16}/> Мои заявки <span>{mineCount}</span></button>
-          <button className={view==="archive"?"sub-nav active":"sub-nav"} onClick={()=>go("archive")}><Icon name="archive" size={16}/> Архив <span>{archive.length}</span></button>
         </div>
       </div>
 
