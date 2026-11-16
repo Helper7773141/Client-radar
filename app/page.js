@@ -25,7 +25,7 @@ function Icon({ name, size = 18 }) {
 }
 const emptyFilters={query:"",kind:"",industry:"",region:"",min:"",max:"",date:"",sort:"new"};
 function Select({label,value,onChange,options,empty="Все"}) {
-  return <label className="filter-control"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">{empty}</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></label>;
+  return <label className="filter-control"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">{empty}</option>{options.map(o=><option key={o} value={o}>{label==="Дата размещения"?"За "+o+" дней":o}</option>)}</select></label>;
 }
 function Badge({status}) {
   return <span className={"status status-"+status}>{status==="realized"&&<Icon name="check" size={13}/>} {LABELS[status]}</span>;
